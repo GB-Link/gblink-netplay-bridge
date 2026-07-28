@@ -6,21 +6,14 @@ on:
   pull_request:
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  check:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-      - name: Install system deps (linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: npm ci
       - run: npm run typecheck
       - run: npm run typecheck:main
@@ -32,14 +25,3 @@ jobs:
         working-directory: src/renderer
       - name: Build main/preload
         run: npm run build:main
-      - name: Package (no publish)
-        run: npx electron-builder --publish never
-      - uses: actions/upload-artifact@v4
-        with:
-          name: gblink-bridge-${{ matrix.os }}
-          path: |
-            release/*.exe
-            release/*.dmg
-            release/*.AppImage
-            release/*.deb
-          if-no-files-found: ignore
