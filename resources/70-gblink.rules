@@ -1,0 +1,2 @@
+# GBLink USB adapter (GB-Link, VID 0x2FE3 PID 0x000A)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2fe3", ATTRS{idProduct}=="000a", MODE="0660", TAG+="uaccess", GROUP="plugdev"

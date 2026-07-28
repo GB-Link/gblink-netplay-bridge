@@ -1,0 +1,63 @@
+appId: com.gblink.bridge
+productName: GBLink Netplay Bridge
+executableName: gblink-bridge
+
+# The usb module ships N-API prebuilds that are ABI-stable under Electron;
+# rebuilding from source would require libudev headers on the build host.
+npmRebuild: false
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - dist/main/**
+  - dist/preload/**
+  - dist/renderer/**
+  - package.json
+
+asarUnpack:
+  - node_modules/usb/**
+
+extraResources:
+  - from: resources/70-gblink.rules
+    to: 70-gblink.rules
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  category: public.app-category.games
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+linux:
+  category: Game
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+
+deb:
+  afterInstall: resources/deb/afterInstall.sh
+  afterRemove: resources/deb/afterRemove.sh
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0

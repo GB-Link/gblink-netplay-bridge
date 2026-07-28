@@ -1,0 +1,29 @@
+{
+  "name": "gblink-netplay-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bridge a GB-Link USB adapter (real GBA) into RetroArch netplay sessions with gpsp players (Pokemon Gen 3 link cable).",
+  "author": "Ashton Herron <ashton@gblink.io>",
+  "homepage": "https://github.com/GB-Link/",
+  "main": "dist/main/index.cjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "typecheck:main": "tsc -p tsconfig.main.json --noEmit",
+    "build:main": "node scripts/build-main.mjs",
+    "start": "npm run build:main && electron .",
+    "dev": "npm run build:main && GBLINK_DEV=1 electron .",
+    "cli": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "usb": "^2.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

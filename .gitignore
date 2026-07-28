@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+*.log
+.DS_Store
+src/renderer/node_modules/
+src/renderer/dist/
+src/renderer/.angular/
