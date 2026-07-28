@@ -4,18 +4,17 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: write
-
 jobs:
-  release:
+  build:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -34,7 +33,12 @@ jobs:
         working-directory: src/renderer
       - name: Build main/preload
         run: npm run build:main
-      - name: Package and attach to release
-        run: npx electron-builder --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package installers
+        run: npx electron-builder --publish never
+      - name: Attach to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            release/*.AppImage
+            release/*.dmg
+            release/*.exe

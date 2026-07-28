@@ -44,4 +44,4 @@ linux:
   category: Game
   target:
     - target: AppImage
-      arch: [x64]
+      arch: [x64, arm64]
