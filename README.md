@@ -37,6 +37,10 @@ Install the udev rule (the app offers to do this for you) or run the permission 
 
 Windows and macOS need no drivers (the firmware carries MS OS 2.0 descriptors; WinUSB binds automatically).
 
+## macOS first launch
+
+Builds are not notarized. On first launch macOS will block the app: open **System Settings → Privacy & Security**, scroll to the blocked-app notice and choose **Open Anyway**. Use the arm64 dmg on Apple Silicon and the x64 dmg on Intel Macs (x64 also runs on Apple Silicon via Rosetta).
+
 ## Development
 
 ```

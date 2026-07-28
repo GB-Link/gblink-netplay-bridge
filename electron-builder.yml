@@ -32,13 +32,17 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 
+afterPack: scripts/afterPackMacSign.cjs
+
 mac:
   target:
     - target: dmg
       arch: [arm64, x64]
   category: public.app-category.games
-  hardenedRuntime: true
-  gatekeeperAssess: false
+  # No signing certificate: skip electron-builder's signing (the afterPack
+  # hook ad-hoc reseals the bundle so Gatekeeper treats it as unsigned
+  # rather than damaged).
+  identity: null
 
 linux:
   category: Game
