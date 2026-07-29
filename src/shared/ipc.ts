@@ -55,6 +55,8 @@ export interface LobbyRoom {
   spectatorCount: number;
   /** Derived: passes the joinable-gpsp filter. */
   joinable: boolean;
+  /** Found via LAN discovery rather than the public lobby. */
+  lan?: boolean;
 }
 
 export interface AppSettings {
@@ -122,6 +124,7 @@ export interface BridgeApi {
   host(req: HostRequest): Promise<void>;
   stop(): Promise<void>;
   lobbyRefresh(): Promise<LobbyRoom[]>;
+  lanScan(): Promise<LobbyRoom[]>;
   getSettings(): Promise<AppSettings>;
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   installUdevRule(): Promise<{ ok: boolean; detail?: string }>;
@@ -136,6 +139,7 @@ export const IPC = {
   host: 'engine:host',
   stop: 'engine:stop',
   lobbyRefresh: 'lobby:refresh',
+  lanScan: 'lan:scan',
   getSettings: 'settings:get',
   setSettings: 'settings:set',
   installUdevRule: 'app:installUdevRule',

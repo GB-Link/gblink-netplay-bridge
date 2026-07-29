@@ -94,6 +94,9 @@ export class BridgeService {
   lobbyRefresh(): Promise<LobbyRoom[]> {
     return this.api.lobbyRefresh();
   }
+  lanScan(): Promise<LobbyRoom[]> {
+    return this.api.lanScan();
+  }
   getSettings(): Promise<AppSettings> {
     return this.api.getSettings();
   }
@@ -424,6 +427,36 @@ class MockBridge implements BridgeApi {
         connectable: false,
         playerCount: 1,
         joinable: false,
+      },
+    ];
+  }
+
+  async lanScan(): Promise<LobbyRoom[]> {
+    await new Promise((r) => setTimeout(r, 400));
+    return [
+      {
+        username: 'CouchCoop',
+        gameName: 'Pokemon - Emerald Version (USA)',
+        gameCrc: 0x1f1c08fb,
+        coreName: 'gpSP',
+        coreVersion: 'gpSP v1.0',
+        ip: '192.168.1.42',
+        port: 55435,
+        hasPassword: false,
+        hasSpectatePassword: false,
+        mitmIp: '',
+        mitmPort: 0,
+        mitmSession: '',
+        hostMethod: 0,
+        retroarchVersion: '1.22.2',
+        country: '',
+        frontend: 'retroarch',
+        connectable: true,
+        isRetroarch: true,
+        playerCount: 0,
+        spectatorCount: 0,
+        joinable: true,
+        lan: true,
       },
     ];
   }

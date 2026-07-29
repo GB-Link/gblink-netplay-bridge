@@ -9,6 +9,7 @@ import {
   type JoinRelayRequest,
 } from '../shared/ipc';
 import { EngineHost } from './engine-host';
+import { scanLan } from './lan-discovery';
 import { fetchRooms } from './lobby';
 import { SettingsStore } from './settings';
 import { installUdevRule } from './udev';
@@ -59,6 +60,7 @@ function main(): void {
     ipcMain.handle(IPC.host, (_e, req: HostRequest) => host.host(req));
     ipcMain.handle(IPC.stop, () => host.stop());
     ipcMain.handle(IPC.lobbyRefresh, () => fetchRooms());
+    ipcMain.handle(IPC.lanScan, () => scanLan());
     ipcMain.handle(IPC.getSettings, () => settings.get());
     ipcMain.handle(IPC.setSettings, (_e, patch: Partial<AppSettings>) => settings.update(patch));
     ipcMain.handle(IPC.installUdevRule, () => installUdevRule());

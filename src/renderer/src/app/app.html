@@ -1,48 +1,46 @@
 <div class="flex h-screen flex-col">
-  <div class="flex min-h-0 flex-1">
-    <aside class="flex w-48 shrink-0 flex-col border-r border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-      <div class="px-4 py-4">
-        <div class="text-sm font-bold tracking-wide">GBLink</div>
-        <div class="text-xs text-neutral-500 dark:text-neutral-400">Netplay Bridge</div>
-      </div>
-      <nav class="flex flex-col gap-1 px-2">
-        @for (item of nav; track item.path) {
-          <a
-            [routerLink]="item.path"
-            routerLinkActive="bg-neutral-200 font-semibold dark:bg-neutral-800"
-            class="rounded px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800/60"
-          >{{ item.label }}</a>
+  <app-status-bar
+    (deviceClick)="deviceOpen.set(true)"
+    (gearClick)="settingsOpen.set(true)"
+  />
+
+  <main class="min-h-0 min-w-0 flex-1 overflow-y-auto">
+    @if (bridge.sessionActive()) {
+      <app-session-view class="block h-full" />
+    } @else {
+      <div class="mx-auto max-w-3xl p-6">
+        @if (closeNotice(); as notice) {
+          <div
+            class="mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm"
+            [class]="notice.graceful
+              ? 'border-neutral-200 bg-white text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300'
+              : 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-600 dark:bg-amber-950 dark:text-amber-200'"
+          >
+            <span>
+              {{ notice.text }}
+              @if (notice.detail) {
+                <span class="opacity-70"> — {{ notice.detail }}</span>
+              }
+            </span>
+            <button
+              (click)="dismissNotice()"
+              class="shrink-0 text-base leading-none opacity-60 hover:opacity-100"
+              aria-label="Dismiss"
+            >&times;</button>
+          </div>
         }
-      </nav>
-      @if (bridge.isMock) {
-        <div class="mt-auto px-4 py-3 text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400">
-          Mock bridge (browser dev)
-        </div>
-      }
-    </aside>
-
-    <main class="min-w-0 flex-1 overflow-y-auto p-6">
-      <router-outlet />
-    </main>
-  </div>
-
-  <footer class="flex shrink-0 items-center gap-6 border-t border-neutral-200 bg-white px-4 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900">
-    <span class="flex items-center gap-2">
-      <app-status-dot [color]="deviceDot()" />
-      <span class="text-neutral-600 dark:text-neutral-300">{{ bridge.deviceState() }}</span>
-    </span>
-    <span class="flex items-center gap-2">
-      <app-status-dot [color]="sessionDot()" />
-      <span class="text-neutral-600 dark:text-neutral-300">
-        {{ bridge.sessionPhase() }} · {{ bridge.peers().length }}
-        {{ bridge.peers().length === 1 ? 'peer' : 'peers' }}
-      </span>
-    </span>
-    @if (bridge.sessionPhase() === 'hosting') {
-      <span class="flex items-center gap-2">
-        <app-status-dot [color]="announceDot()" />
-        <span class="text-neutral-600 dark:text-neutral-300">announce {{ bridge.announce().status }}</span>
-      </span>
+        <app-play-card />
+        <app-lobby-list class="mt-6 block" />
+      </div>
     }
-  </footer>
+  </main>
+
+  <app-log-drawer />
+
+  @if (settingsOpen()) {
+    <app-settings-modal (closed)="settingsOpen.set(false)" />
+  }
+  @if (deviceOpen()) {
+    <app-device-drawer (closed)="deviceOpen.set(false)" />
+  }
 </div>

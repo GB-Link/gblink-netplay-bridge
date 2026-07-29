@@ -1,66 +1,38 @@
-import { Component, computed, inject } from '@angular/core';
-import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { Component, computed, inject, signal } from '@angular/core';
 import { BridgeService } from './services/bridge.service';
-import { StatusDot, type DotColor } from './components/status-dot';
+import { closeReasonText } from './copy/state-copy';
+import { StatusBar } from './components/status-bar';
+import { PlayCard } from './components/play-card';
+import { LobbyList } from './components/lobby-list';
+import { SessionView } from './components/session-view';
+import { LogDrawer } from './components/log-drawer';
+import { SettingsModal } from './components/settings-modal';
+import { DeviceDrawer } from './components/device-drawer';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, StatusDot],
+  imports: [StatusBar, PlayCard, LobbyList, SessionView, LogDrawer, SettingsModal, DeviceDrawer],
   templateUrl: './app.html',
 })
 export class App {
   protected readonly bridge = inject(BridgeService);
 
-  protected readonly nav = [
-    { path: '/device', label: 'Device' },
-    { path: '/join', label: 'Join' },
-    { path: '/host', label: 'Host' },
-    { path: '/session', label: 'Session' },
-    { path: '/settings', label: 'Settings' },
-  ];
+  protected readonly settingsOpen = signal(false);
+  protected readonly deviceOpen = signal(false);
 
-  protected readonly deviceDot = computed<DotColor>(() => {
-    switch (this.bridge.deviceState()) {
-      case 'link-connected':
-        return 'green';
-      case 'handshake-received':
-        return 'blue';
-      case 'present':
-      case 'device-ready':
-      case 'awaiting-gba':
-      case 'reconnecting':
-        return 'amber';
-      case 'access-denied':
-        return 'red';
-      default:
-        return 'gray';
-    }
+  /** Why the last session ended, shown in the idle view until dismissed. */
+  protected readonly closeNotice = computed(() => {
+    const reason = this.bridge.closeReason();
+    if (!reason) return null;
+    return {
+      text: closeReasonText(reason),
+      detail: this.bridge.closeDetail(),
+      graceful: reason === 'graceful',
+    };
   });
 
-  protected readonly sessionDot = computed<DotColor>(() => {
-    switch (this.bridge.sessionPhase()) {
-      case 'connected':
-      case 'hosting':
-        return 'green';
-      case 'connecting':
-      case 'relay-connecting':
-      case 'handshaking':
-        return 'amber';
-      default:
-        return 'gray';
-    }
-  });
-
-  protected readonly announceDot = computed<DotColor>(() => {
-    switch (this.bridge.announce().status) {
-      case 'ok':
-        return 'green';
-      case 'not-connectable':
-        return 'amber';
-      case 'failed':
-        return 'red';
-      default:
-        return 'gray';
-    }
-  });
+  protected dismissNotice(): void {
+    this.bridge.closeReason.set(null);
+    this.bridge.closeDetail.set(null);
+  }
 }

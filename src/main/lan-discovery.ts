@@ -1,5 +1,6 @@
 import dgram from 'node:dgram';
-import { writeFixedString } from '../engine/netplay/messages';
+import { readFixedString, writeFixedString } from '../engine/netplay/messages';
+import type { LobbyRoom } from '../shared/ipc';
 
 /** RetroArch LAN discovery: 4-byte "RANQ" query, 688-byte "RANS" reply. */
 const DISCOVERY_PORT = 55435;
@@ -47,6 +48,72 @@ function buildReply(info: LanHostInfo): Buffer {
   writeFixedString(buf, 176, info.gameName, 256);
   writeFixedString(buf, 432, 'N/A', 256);
   return buf;
+}
+
+/**
+ * Broadcast a discovery query and collect replies from RetroArch hosts on
+ * the local network, shaped as lobby rows (route "LAN", direct join).
+ */
+export function scanLan(timeoutMs = 1200): Promise<LobbyRoom[]> {
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    const found = new Map<string, LobbyRoom>();
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {
+        /* already closed */
+      }
+      resolve([...found.values()]);
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    socket.on('error', finish);
+    socket.on('message', (msg, rinfo) => {
+      if (msg.length !== REPLY_SIZE || msg.readUInt32BE(0) !== RANS_MAGIC) return;
+      if (!isPrivateIPv4(rinfo.address)) return;
+      const coreName = readFixedString(msg, 80, 32);
+      const flags = msg.readUInt32BE(12);
+      const room: LobbyRoom = {
+        username: readFixedString(msg, 16, 32),
+        gameName: readFixedString(msg, 176, 256),
+        gameCrc: msg.readInt32BE(4) >>> 0,
+        coreName,
+        coreVersion: readFixedString(msg, 112, 32),
+        ip: rinfo.address,
+        port: msg.readInt32BE(8),
+        hasPassword: (flags & 1) !== 0,
+        hasSpectatePassword: (flags & 2) !== 0,
+        mitmIp: '',
+        mitmPort: 0,
+        mitmSession: '',
+        hostMethod: 0,
+        retroarchVersion: readFixedString(msg, 144, 32),
+        country: '',
+        frontend: readFixedString(msg, 48, 32),
+        connectable: true,
+        isRetroarch: true,
+        playerCount: 0,
+        spectatorCount: 0,
+        joinable: coreName.toLowerCase() === 'gpsp',
+        lan: true,
+      };
+      found.set(`${room.ip}:${room.port}`, room);
+    });
+    socket.bind(0, () => {
+      try {
+        socket.setBroadcast(true);
+        const query = Buffer.alloc(4);
+        query.writeUInt32BE(RANQ_MAGIC, 0);
+        socket.send(query, DISCOVERY_PORT, '255.255.255.255');
+      } catch {
+        finish();
+      }
+    });
+  });
 }
 
 export class LanResponder {

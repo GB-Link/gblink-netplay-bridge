@@ -16,6 +16,7 @@ const api: BridgeApi = {
   host: (req: HostRequest) => ipcRenderer.invoke(IPC.host, req) as Promise<void>,
   stop: () => ipcRenderer.invoke(IPC.stop) as Promise<void>,
   lobbyRefresh: () => ipcRenderer.invoke(IPC.lobbyRefresh) as Promise<LobbyRoom[]>,
+  lanScan: () => ipcRenderer.invoke(IPC.lanScan) as Promise<LobbyRoom[]>,
   getSettings: () => ipcRenderer.invoke(IPC.getSettings) as Promise<AppSettings>,
   setSettings: (patch: Partial<AppSettings>) =>
     ipcRenderer.invoke(IPC.setSettings, patch) as Promise<AppSettings>,
