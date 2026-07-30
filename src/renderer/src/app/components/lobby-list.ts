@@ -193,6 +193,14 @@ export class LobbyList {
   }
 
   private async joinRoom(room: LobbyRoom, password?: string): Promise<void> {
+    try {
+      await this.tryJoinRoom(room, password);
+    } catch (e) {
+      this.bridge.reportActionError(e);
+    }
+  }
+
+  private async tryJoinRoom(room: LobbyRoom, password?: string): Promise<void> {
     const nick = this.ui.effectiveNick();
     if (room.hostMethod === 3) {
       await this.bridge.joinRelay({

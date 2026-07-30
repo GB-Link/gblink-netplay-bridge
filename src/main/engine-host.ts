@@ -88,14 +88,22 @@ export class EngineHost {
     void this.watcher.check();
   }
 
-  private async startSession(start: () => Promise<void>): Promise<void> {
+  private async startSession(start: () => Promise<void>, port?: number): Promise<void> {
     // The watcher's probe and a session cannot share the claimed interface.
     this.watcher.suspend();
     try {
       await start();
     } catch (e) {
+      // A half-started engine would block the next attempt; tear it down and
+      // put the UI back to idle before reporting a usable message.
+      await this.engine.stop().catch(() => undefined);
+      this.stopAnnounce();
+      this.lanResponder.stop();
       this.watcher.resume();
-      throw e;
+      const detail = describeStartFailure(e as Error, port);
+      this.log('error', detail);
+      this.broadcastSession('socket-error', detail);
+      throw new Error(detail);
     }
   }
 
@@ -109,6 +117,7 @@ export class EngineHost {
         nick: req.nick,
         password: req.password,
       }),
+      req.port,
     );
   }
 
@@ -124,6 +133,7 @@ export class EngineHost {
         nick: req.nick,
         password: req.password,
       }),
+      req.port,
     );
   }
 
@@ -151,6 +161,7 @@ export class EngineHost {
         relay,
         contentCrc: req.gameCrc ? parseInt(req.gameCrc, 16) : undefined,
       }),
+      req.port,
     );
     if (!req.announce) this.broadcast({ type: 'announce', status: 'off' });
   }
@@ -324,4 +335,31 @@ export class EngineHost {
       win.webContents.send(IPC.event, ev);
     }
   }
+}
+
+/** Turn socket/bind failures into something a player can act on. */
+function describeStartFailure(e: Error, port?: number): string {
+  const code = (e as NodeJS.ErrnoException).code;
+  const where = port === undefined ? 'that port' : `port ${port}`;
+  switch (code) {
+    case 'EADDRINUSE':
+      return `${capitalize(where)} is already in use on this computer — close the other program (or another copy of this app) or pick a different port.`;
+    case 'EACCES':
+      return `${capitalize(where)} needs administrator rights — choose a port above 1024.`;
+    case 'ECONNREFUSED':
+      return 'The host refused the connection — check the address and that they are still hosting.';
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return 'That address could not be found — check it for typos.';
+    case 'ETIMEDOUT':
+      return 'The connection timed out — check the address and port, or ask the host to use a relay.';
+    case 'ECONNRESET':
+      return 'The host closed the connection unexpectedly.';
+    default:
+      return e.message;
+  }
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

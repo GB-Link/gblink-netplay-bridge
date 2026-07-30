@@ -275,6 +275,14 @@ export class PlayCard {
 
   protected async connect(): Promise<void> {
     if (this.connectDisabled()) return;
+    try {
+      await this.tryConnect();
+    } catch (e) {
+      this.bridge.reportActionError(e);
+    }
+  }
+
+  private async tryConnect(): Promise<void> {
     const nick = this.ui.effectiveNick();
     const password = this.password || undefined;
     const session = this.relaySession.trim();
@@ -304,6 +312,14 @@ export class PlayCard {
 
   protected async startHosting(): Promise<void> {
     if (this.bridge.sessionActive()) return;
+    try {
+      await this.hostSession();
+    } catch (e) {
+      this.bridge.reportActionError(e);
+    }
+  }
+
+  private async hostSession(): Promise<void> {
     await this.bridge.host({
       port: this.hostPort,
       nick: this.ui.effectiveNick(),

@@ -72,6 +72,8 @@ export class BridgeService {
   /** Adapter enumerated but not openable (permissions, driver, or in use). */
   /** App version, shown in the footer. */
   readonly appVersion = signal('');
+  /** Failure from the last connect/host attempt, shown until dismissed. */
+  readonly actionError = signal<string | null>(null);
   readonly usbBlocked = signal(false);
   /** Raw error text behind usbBlocked, shown verbatim for diagnosis. */
   readonly usbBlockedDetail = signal<string | null>(null);
@@ -124,6 +126,15 @@ export class BridgeService {
     return this.api.copyText(text);
   }
 
+  /** Record a failed command; strips Electron's IPC wrapper from the text. */
+  reportActionError(e: unknown): void {
+    const raw = e instanceof Error ? e.message : String(e);
+    const cleaned = raw
+      .replace(/^Error invoking remote method '[^']*':\s*/, '')
+      .replace(/^Error:\s*/, '');
+    this.actionError.set(cleaned);
+  }
+
   private apply(ev: BridgeEvent): void {
     switch (ev.type) {
       case 'device': {
@@ -158,6 +169,7 @@ export class BridgeService {
         } else {
           this.closeReason.set(null);
           this.closeDetail.set(null);
+          if (ev.phase !== 'connecting') this.actionError.set(null);
         }
         break;
       }

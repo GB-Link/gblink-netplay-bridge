@@ -22,6 +22,8 @@ export class App {
 
   /** Why the last session ended, shown in the idle view until dismissed. */
   protected readonly closeNotice = computed(() => {
+    const failure = this.bridge.actionError();
+    if (failure) return { text: failure, detail: null, graceful: false };
     const reason = this.bridge.closeReason();
     if (!reason) return null;
     return {
@@ -32,6 +34,7 @@ export class App {
   });
 
   protected dismissNotice(): void {
+    this.bridge.actionError.set(null);
     this.bridge.closeReason.set(null);
     this.bridge.closeDetail.set(null);
   }
