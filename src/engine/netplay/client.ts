@@ -7,6 +7,7 @@ import type {
   NetplayJoinOptions,
   NetplayPeer,
 } from '../types';
+import { GPSP_NETPACKET_VERSION } from '../types';
 import {
   BANNED_MAGIC,
   FULL_MAGIC,
@@ -228,7 +229,7 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
     // Any INFO (even empty) means the host accepted our password.
     this.gotInfo = true;
     const coreName = this.opts.coreName ?? 'gpSP';
-    const coreVersion = this.opts.coreVersion ?? 'gpSP v1.0';
+    const coreVersion = this.opts.coreVersion ?? GPSP_NETPACKET_VERSION;
     if (payload.length === 0) {
       // Host has no content loaded yet: answer with crc 0 and keep waiting.
       this.send(writeFrame(NetplayCmd.INFO, buildInfoPayload({ contentCrc: 0, coreName, coreVersion })));

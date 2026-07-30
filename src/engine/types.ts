@@ -113,10 +113,21 @@ export interface INetplayEndpoint extends EventEmitter<NetplayEvents> {
   readonly playingPeers: ReadonlyMap<number, NetplayPeer>;
 }
 
+/** gpsp's library_version (GPSP_VERSION): what RetroArch announces publicly. */
+export const GPSP_CORE_VERSION = 'v1.1.0';
+
+/**
+ * gpsp's netpacket protocol_version (GPSP_NETPACKET_VERSION). RetroArch puts
+ * this in the handshake INFO frame instead of library_version whenever a core
+ * registers a netpacket interface, and peers compare the two strings — so it
+ * must track gpsp's value, not the core's release number.
+ */
+export const GPSP_NETPACKET_VERSION = 'gpSP v1.0';
+
 export interface NetplayIdentity {
   nick: string;
-  /** Defaults: coreName "gpSP", coreVersion "gpSP v1.0" (gpsp netpacket
-   *  protocol_version), retroarchVersion "1.22.2". */
+  /** Defaults: coreName "gpSP", coreVersion GPSP_NETPACKET_VERSION (the INFO
+   *  frame carries the netpacket protocol string), retroarchVersion "1.22.2". */
   coreName?: string;
   coreVersion?: string;
   retroarchVersion?: string;

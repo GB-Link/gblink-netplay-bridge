@@ -42,7 +42,7 @@ async function run(opts: EngineStartOptions): Promise<void> {
 
 async function main(): Promise<void> {
   const cmd = process.argv[2];
-  const nick = arg('nick', 'GBLink') as string;
+  const nick = arg('nick', 'Anonymous') as string;
   switch (cmd) {
     case 'probe':
       await probe();

@@ -4,7 +4,7 @@ import { app } from 'electron';
 import type { AppSettings } from '../shared/ipc';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  nick: 'GBLink',
+  nick: 'Anonymous',
   defaultPort: 55435,
   gameName: 'Pokemon Ruby',
   gameCrc: '',

@@ -8,10 +8,10 @@ type RelayChoice = RelayHandle | 'off';
 
 const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
   { value: 'off', label: 'Off (listen directly)' },
-  { value: 'nyc', label: 'New York' },
-  { value: 'madrid', label: 'Madrid' },
-  { value: 'saopaulo', label: 'Sao Paulo' },
-  { value: 'singapore', label: 'Singapore' },
+  { value: 'nyc', label: 'North America (East Coast, USA)' },
+  { value: 'madrid', label: 'Western Europe' },
+  { value: 'saopaulo', label: 'South America (Southeast, Brazil)' },
+  { value: 'singapore', label: 'Southeast Asia' },
   { value: 'custom', label: 'Custom…' },
 ];
 
@@ -45,7 +45,7 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
           <span class="text-neutral-600 dark:text-neutral-400">Nickname</span>
           <input
             [ngModel]="ui.nick()"
-            (ngModelChange)="ui.nick.set($event)"
+            (ngModelChange)="ui.setNick($event)"
             class="w-36 rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700"
           />
         </label>
@@ -275,7 +275,7 @@ export class PlayCard {
 
   protected async connect(): Promise<void> {
     if (this.connectDisabled()) return;
-    const nick = this.ui.nick().trim() || 'Player';
+    const nick = this.ui.effectiveNick();
     const password = this.password || undefined;
     const session = this.relaySession.trim();
     if (session) {
@@ -306,7 +306,7 @@ export class PlayCard {
     if (this.bridge.sessionActive()) return;
     await this.bridge.host({
       port: this.hostPort,
-      nick: this.ui.nick().trim() || 'Player',
+      nick: this.ui.effectiveNick(),
       password: this.hostPassword || undefined,
       spectatePassword: this.spectatePassword || undefined,
       announce: this.announce,

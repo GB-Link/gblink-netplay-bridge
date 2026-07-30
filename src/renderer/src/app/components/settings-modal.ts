@@ -1,6 +1,7 @@
 import { Component, inject, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { BridgeService } from '../services/bridge.service';
+import { UiStateService } from '../services/ui-state.service';
 import type { AppSettings } from '../../../../shared/ipc';
 
 @Component({
@@ -64,10 +65,10 @@ import type { AppSettings } from '../../../../shared/ipc';
               class="w-full rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900"
             >
               <option value="off">Off</option>
-              <option value="nyc">New York</option>
-              <option value="madrid">Madrid</option>
-              <option value="saopaulo">Sao Paulo</option>
-              <option value="singapore">Singapore</option>
+              <option value="nyc">North America (East Coast, USA)</option>
+              <option value="madrid">Western Europe</option>
+              <option value="saopaulo">South America (Southeast, Brazil)</option>
+              <option value="singapore">Southeast Asia</option>
               <option value="custom">Custom</option>
             </select>
           </label>
@@ -116,6 +117,7 @@ import type { AppSettings } from '../../../../shared/ipc';
 })
 export class SettingsModal {
   protected readonly bridge = inject(BridgeService);
+  private readonly ui = inject(UiStateService);
   protected readonly model = signal<AppSettings | null>(null);
   protected readonly saved = signal(false);
 
@@ -130,6 +132,9 @@ export class SettingsModal {
     if (!m) return;
     const result = await this.bridge.setSettings({ ...m });
     this.model.set({ ...result });
+    // Keep the play card's shared nickname in step with the saved value.
+    this.ui.nick.set(result.nick);
+    this.ui.nickSeeded.set(true);
     this.saved.set(true);
     setTimeout(() => this.saved.set(false), 1500);
   }

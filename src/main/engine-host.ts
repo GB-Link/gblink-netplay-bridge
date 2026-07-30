@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron';
 import { DeviceWatcher, GBLinkEngine, type SessionPhase as EngineSessionPhase } from '../engine/index';
-import { FwStatus, type CloseReason, type NetplayPeer } from '../engine/types';
+import { FwStatus, GPSP_CORE_VERSION, type CloseReason, type NetplayPeer } from '../engine/types';
 import {
   IPC,
   type BridgeEvent,
@@ -223,7 +223,7 @@ export class EngineHost {
         gameCrc: req.gameCrc ?? '',
         hasPassword: !!req.password,
         hasSpectatePassword: !!req.spectatePassword,
-        coreVersion: 'gpSP v1.0',
+        coreVersion: GPSP_CORE_VERSION,
       });
     }
   }
@@ -260,7 +260,7 @@ export class EngineHost {
       const res = await announce({
         username: req.nick,
         coreName: 'gpSP',
-        coreVersion: 'gpSP v1.0',
+        coreVersion: GPSP_CORE_VERSION,
         gameName: req.gameName,
         gameCrc: normalizeCrc(req.gameCrc),
         port: extPort,

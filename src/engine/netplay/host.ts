@@ -8,6 +8,7 @@ import type {
   NetplayHostOptions,
   NetplayPeer,
 } from '../types';
+import { GPSP_NETPACKET_VERSION } from '../types';
 import {
   HIGH_PROTOCOL,
   LOW_PROTOCOL,
@@ -107,7 +108,7 @@ export class NetplayHost extends EventEmitter<NetplayEvents> implements INetplay
     super();
     this.hostImpl = implMagic(opts.retroarchVersion ?? '1.22.2', HIGH_PROTOCOL);
     this.coreName = opts.coreName ?? 'gpSP';
-    this.coreVersion = opts.coreVersion ?? 'gpSP v1.0';
+    this.coreVersion = opts.coreVersion ?? GPSP_NETPACKET_VERSION;
   }
 
   get localClientId(): number | null {

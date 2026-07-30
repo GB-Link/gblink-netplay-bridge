@@ -186,7 +186,7 @@ class MockBridge implements BridgeApi {
   private tx = 0;
   private rx = 0;
   private settings: AppSettings = {
-    nick: 'Player',
+    nick: 'Anonymous',
     defaultPort: 55435,
     gameName: 'Pokemon - Emerald Version (USA)',
     gameCrc: '1F1C08FB',
@@ -333,7 +333,7 @@ class MockBridge implements BridgeApi {
   async lobbyRefresh(): Promise<LobbyRoom[]> {
     const base = {
       coreName: 'gpSP',
-      coreVersion: 'gpSP v1.0',
+      coreVersion: 'v1.1.0',
       hasSpectatePassword: false,
       retroarchVersion: '1.22.2',
       frontend: 'retroarch',
@@ -439,7 +439,7 @@ class MockBridge implements BridgeApi {
         gameName: 'Pokemon - Emerald Version (USA)',
         gameCrc: 0x1f1c08fb,
         coreName: 'gpSP',
-        coreVersion: 'gpSP v1.0',
+        coreVersion: 'v1.1.0',
         ip: '192.168.1.42',
         port: 55435,
         hasPassword: false,

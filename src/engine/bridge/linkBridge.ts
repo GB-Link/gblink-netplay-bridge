@@ -19,6 +19,10 @@ const PEER_STALE_MS = 4000;
 const GRACEFUL_CLOSE_TICK_MS = 100;
 const GRACEFUL_CLOSE_MAX_MS = 3000;
 const REINIT_DELAY_MS = 750;
+/** LinkClosed arriving this soon after our own Cancel is our own doing. */
+const SELF_CLOSE_GRACE_MS = 2000;
+/** Consecutive failed link-mode starts before we stop retrying. */
+const MAX_REINIT_ATTEMPTS = 5;
 /**
  * Minimum time between arming the adapter handshake and driving 0x8FFF.
  * The real child GBA needs actual B9A0 exchange rounds (~16 ms each) before
@@ -87,6 +91,10 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
    */
   private readonly pendingRounds: Round[] = [];
   private handshakeArmedAt = 0;
+  /** When we last issued a Cancel (which provokes a LinkClosed of our own). */
+  private selfCancelAt = 0;
+  /** Consecutive link-mode starts that never reached HandshakeReceived. */
+  private reinitAttempts = 0;
   /**
    * A state-1 packet has been seen in the current section. After a link
    * teardown the peer keeps broadcasting state-2 keepalives until its game
@@ -154,13 +162,40 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     if (this.staleTimer) clearInterval(this.staleTimer);
     if (this.countersTimer) clearInterval(this.countersTimer);
     if (this.evalTimer) clearTimeout(this.evalTimer);
+    this.selfCancelAt = Date.now();
     await this.adapter.cancel().catch(() => undefined);
     this.setPhase('closed');
+  }
+
+  /**
+   * Re-enter link mode after the firmware reported LinkClosed — but never in
+   * response to a close we caused ourselves. Cancel makes the firmware exit
+   * its mode and emit LinkClosed, and every init begins with a Cancel, so
+   * reacting to those would cycle Cancel -> SetMode forever (visible on the
+   * adapter as continuous mode switching).
+   */
+  private scheduleReinit(): void {
+    if (this.stopped || this.closing || this.reinitializing) return;
+    if (Date.now() - this.selfCancelAt < SELF_CLOSE_GRACE_MS) {
+      this.emit('log', 'link closed by our own cancel — not re-initializing');
+      return;
+    }
+    if (this.reinitAttempts >= MAX_REINIT_ATTEMPTS) {
+      this.emit(
+        'log',
+        `link mode failed to start ${this.reinitAttempts} times — unplug and replug the adapter`,
+      );
+      return;
+    }
+    this.reinitAttempts++;
+    setTimeout(() => void this.initFirmware(), REINIT_DELAY_MS).unref?.();
   }
 
   private async initFirmware(): Promise<void> {
     if (this.reinitializing || this.stopped) return;
     this.reinitializing = true;
+    // initLinkMode opens with Cancel, which itself provokes a LinkClosed.
+    this.selfCancelAt = Date.now();
     try {
       const fw = await this.adapter.getFirmwareInfo();
       if (fw.major < 2 || (fw.major === 2 && fw.minor < 2)) {
@@ -232,6 +267,8 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     this.emit('log', `fw status 0x${status.toString(16)}`);
     switch (status) {
       case FwStatus.HandshakeReceived:
+        // Link mode is alive and the GBA is talking: retries earned back.
+        this.reinitAttempts = 0;
         this.sectionLive = true;
         this.setPhase('cable-club', status);
         this.evaluate();
@@ -261,9 +298,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
         this.emitter.disable();
         this.localState = Mpk1State.Preinit;
         this.setPhase('closing', status);
-        if (!this.stopped) {
-          setTimeout(() => void this.initFirmware(), REINIT_DELAY_MS).unref?.();
-        }
+        this.scheduleReinit();
         break;
       default:
         break;
@@ -518,6 +553,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
       }
       if (this.relayActive) {
         // Timed out without the firmware acknowledging: force the mode down.
+        this.selfCancelAt = Date.now();
         await this.adapter.cancel().catch(() => undefined);
         this.resetSection();
       }
