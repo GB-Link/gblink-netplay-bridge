@@ -11,6 +11,7 @@ import {
 } from '../shared/ipc';
 
 const api: BridgeApi = {
+  platform: process.platform,
   joinDirect: (req: JoinDirectRequest) => ipcRenderer.invoke(IPC.joinDirect, req) as Promise<void>,
   joinRelay: (req: JoinRelayRequest) => ipcRenderer.invoke(IPC.joinRelay, req) as Promise<void>,
   host: (req: HostRequest) => ipcRenderer.invoke(IPC.host, req) as Promise<void>,

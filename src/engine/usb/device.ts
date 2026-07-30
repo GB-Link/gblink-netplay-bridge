@@ -81,12 +81,28 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
     if (!dev) {
       throw new Error(`GBLink device ${hex(GBLINK_VID, 4)}:${hex(GBLINK_PID, 4)} not found`);
     }
-    dev.open();
-    const iface = dev.interface(0);
-    if (process.platform === 'linux' && iface.isKernelDriverActive()) {
-      iface.detachKernelDriver();
+    // Annotate which step failed: opening fails when no usable driver is
+    // bound (Windows without WinUSB), claiming fails when another program
+    // holds the interface or permissions are missing.
+    try {
+      dev.open();
+    } catch (e) {
+      throw new Error(`cannot open GB-Link: ${describeUsbError(e)}`);
     }
-    iface.claim();
+    const iface = dev.interface(0);
+    try {
+      if (process.platform === 'linux' && iface.isKernelDriverActive()) {
+        iface.detachKernelDriver();
+      }
+      iface.claim();
+    } catch (e) {
+      try {
+        dev.close();
+      } catch {
+        /* ignore */
+      }
+      throw new Error(`cannot claim GB-Link interface: ${describeUsbError(e)}`);
+    }
 
     this.cmdOut = this.requireOut(iface, EP_CMD_OUT);
     this.dataOut = this.requireOut(iface, EP_DATA_OUT);
@@ -214,4 +230,11 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
     }
     return ep;
   }
+}
+
+/** libusb errors carry a numeric errno; surface the symbolic name with it. */
+function describeUsbError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const errno = (e as { errno?: number }).errno;
+  return errno === undefined ? msg : `${msg} (errno ${errno})`;
 }

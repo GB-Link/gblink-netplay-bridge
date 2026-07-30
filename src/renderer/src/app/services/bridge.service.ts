@@ -33,7 +33,9 @@ export interface AnnounceState {
 }
 
 const LOG_CAP = 500;
-const ACCESS_ERROR_RE = /LIBUSB_ERROR_ACCESS|EACCES|access denied|permission denied/i;
+/** Log messages meaning the adapter is present but could not be opened. */
+const USB_BLOCKED_RE =
+  /LIBUSB_ERROR_ACCESS|LIBUSB_ERROR_BUSY|LIBUSB_ERROR_NOT_SUPPORTED|EACCES|access denied|permission denied|cannot open GB-Link|cannot claim GB-Link/i;
 
 export const UDEV_RULE_PATH = '/etc/udev/rules.d/70-gblink.rules';
 export const UDEV_RULE_TEXT =
@@ -45,6 +47,8 @@ export class BridgeService {
   private readonly api: BridgeApi;
 
   readonly isMock: boolean;
+  /** Host platform, for platform-specific troubleshooting copy. */
+  readonly platform: string;
 
   readonly deviceState = signal<DeviceStateName>('absent');
   readonly firmware = signal<FirmwareVersion | null>(null);
@@ -65,7 +69,10 @@ export class BridgeService {
   readonly log = signal<LogEntry[]>([]);
   /** Device + link state changes, newest first. */
   readonly timeline = signal<TimelineEntry[]>([]);
-  readonly usbAccessDenied = signal(false);
+  /** Adapter enumerated but not openable (permissions, driver, or in use). */
+  readonly usbBlocked = signal(false);
+  /** Raw error text behind usbBlocked, shown verbatim for diagnosis. */
+  readonly usbBlockedDetail = signal<string | null>(null);
 
   readonly sessionActive = computed(() => {
     const p = this.sessionPhase();
@@ -76,6 +83,7 @@ export class BridgeService {
     const real = (window as { bridge?: BridgeApi }).bridge;
     this.isMock = !real;
     this.api = real ?? new MockBridge();
+    this.platform = this.api.platform;
     this.api.onEvent((ev) => this.zone.run(() => this.apply(ev)));
   }
 
@@ -120,9 +128,10 @@ export class BridgeService {
         if (ev.cableType !== undefined) this.cableType.set(ev.cableType);
         if (ev.state !== undefined) {
           this.deviceState.set(ev.state);
-          if (ev.state === 'access-denied') this.usbAccessDenied.set(true);
-          else if (ev.state === 'present' || ev.state === 'device-ready') {
-            this.usbAccessDenied.set(false);
+          if (ev.state === 'access-denied') this.usbBlocked.set(true);
+          else if (ev.state === 'device-ready') {
+            this.usbBlocked.set(false);
+            this.usbBlockedDetail.set(null);
           }
           this.pushTimeline('device', `Adapter: ${ev.state}`);
           if (ev.state === 'absent') this.cableType.set(null);
@@ -164,7 +173,10 @@ export class BridgeService {
         this.hostReady.set({ extPort: ev.extPort, relaySessionId: ev.relaySessionId });
         break;
       case 'log': {
-        if (ACCESS_ERROR_RE.test(ev.msg)) this.usbAccessDenied.set(true);
+        if (USB_BLOCKED_RE.test(ev.msg)) {
+          this.usbBlocked.set(true);
+          this.usbBlockedDetail.set(ev.msg);
+        }
         this.log.update((entries) =>
           [{ ts: ev.ts, level: ev.level, msg: ev.msg }, ...entries].slice(0, LOG_CAP),
         );
@@ -180,6 +192,7 @@ export class BridgeService {
 
 /** Plain-browser stand-in so every screen is developable with `ng serve`. */
 class MockBridge implements BridgeApi {
+  readonly platform = 'linux';
   private readonly listeners = new Set<(ev: BridgeEvent) => void>();
   private countersTimer: ReturnType<typeof setInterval> | null = null;
   private announceTimer: ReturnType<typeof setInterval> | null = null;

@@ -119,6 +119,8 @@ export type BridgeEvent =
   | { type: 'log'; level: 'info' | 'warn' | 'error' | 'debug'; msg: string; ts: number };
 
 export interface BridgeApi {
+  /** Host platform ('linux' | 'win32' | 'darwin'): drives troubleshooting copy. */
+  readonly platform: string;
   joinDirect(req: JoinDirectRequest): Promise<void>;
   joinRelay(req: JoinRelayRequest): Promise<void>;
   host(req: HostRequest): Promise<void>;

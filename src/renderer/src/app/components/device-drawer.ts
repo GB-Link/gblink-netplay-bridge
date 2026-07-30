@@ -34,38 +34,62 @@ import { cableTypeText, deviceStateText, firmwareText } from '../copy/state-copy
             </div>
           </section>
 
-          @if (bridge.usbAccessDenied()) {
+          @if (bridge.usbBlocked()) {
             <section
               class="mb-4 rounded-lg border border-amber-400 bg-amber-50 p-4 dark:border-amber-600 dark:bg-amber-950"
             >
               <div class="font-medium text-amber-800 dark:text-amber-200">
-                Linux: USB access denied
+                The adapter cannot be opened
               </div>
-              <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                Your user cannot open the GB-Link device. Install this udev rule as
-                <code>{{ rulePath }}</code>, then replug the adapter:
-              </p>
-              <pre
-                class="mt-2 overflow-x-auto rounded bg-white p-2 text-xs dark:bg-neutral-900"
-              >{{ ruleText }}</pre>
-              <div class="mt-3 flex items-center gap-2">
-                <button
-                  (click)="copyRule()"
-                  class="rounded border border-amber-500 px-3 py-1 text-sm hover:bg-amber-100 dark:hover:bg-amber-900"
-                >{{ copied() ? 'Copied' : 'Copy' }}</button>
-                <button
-                  (click)="installRule()"
-                  class="rounded bg-amber-600 px-3 py-1 text-sm text-white hover:bg-amber-700"
-                >Install rule…</button>
-                @if (installResult(); as res) {
-                  <span
-                    class="text-sm"
-                    [class]="res.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'"
-                  >
-                    {{ res.ok ? 'Rule installed — replug the adapter' : 'Install failed: ' + (res.detail ?? 'unknown error') }}
-                  </span>
-                }
-              </div>
+              @if (bridge.usbBlockedDetail(); as detail) {
+                <p class="mt-1 font-mono text-xs text-amber-700 dark:text-amber-300">{{ detail }}</p>
+              }
+
+              @if (isLinux()) {
+                <p class="mt-2 text-sm text-amber-700 dark:text-amber-300">
+                  Your user needs permission for the device. Install this udev rule as
+                  <code>{{ rulePath }}</code>, then replug the adapter:
+                </p>
+                <pre
+                  class="mt-2 overflow-x-auto rounded bg-white p-2 text-xs dark:bg-neutral-900"
+                >{{ ruleText }}</pre>
+                <div class="mt-3 flex items-center gap-2">
+                  <button
+                    (click)="copyRule()"
+                    class="rounded border border-amber-500 px-3 py-1 text-sm hover:bg-amber-100 dark:hover:bg-amber-900"
+                  >{{ copied() ? 'Copied' : 'Copy' }}</button>
+                  <button
+                    (click)="installRule()"
+                    class="rounded bg-amber-600 px-3 py-1 text-sm text-white hover:bg-amber-700"
+                  >Install rule…</button>
+                  @if (installResult(); as res) {
+                    <span
+                      class="text-sm"
+                      [class]="res.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'"
+                    >
+                      {{ res.ok ? 'Rule installed — replug the adapter' : 'Install failed: ' + (res.detail ?? 'unknown error') }}
+                    </span>
+                  }
+                </div>
+              } @else if (isWindows()) {
+                <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-700 dark:text-amber-300">
+                  <li>Close anything else using the adapter — a browser tab with a
+                      GB-Link web app keeps exclusive hold of it.</li>
+                  <li>Unplug and replug the adapter, then reopen this app.</li>
+                  <li>Update the adapter to firmware 2.2.1 or newer: older firmware does
+                      not tell Windows to attach WinUSB to the adapter's control
+                      interface, so it cannot be opened at all.</li>
+                  <li>Still failing after a firmware update? Windows may be caching the
+                      old descriptors. Open Device Manager, uninstall “GBLink USB”
+                      (tick “delete the driver software” if offered), then replug.</li>
+                </ul>
+              } @else {
+                <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-700 dark:text-amber-300">
+                  <li>Close anything else using the adapter — a browser tab with a
+                      GB-Link web app keeps exclusive hold of it.</li>
+                  <li>Unplug and replug the adapter, then reopen this app.</li>
+                </ul>
+              }
             </section>
           }
 
@@ -106,6 +130,14 @@ export class DeviceDrawer {
   protected readonly rulePath = UDEV_RULE_PATH;
   protected readonly ruleText = UDEV_RULE_TEXT;
   protected readonly copied = signal(false);
+
+  protected isLinux(): boolean {
+    return this.bridge.platform === 'linux';
+  }
+
+  protected isWindows(): boolean {
+    return this.bridge.platform === 'win32';
+  }
   protected readonly installResult = signal<{ ok: boolean; detail?: string } | null>(null);
 
   readonly closed = output<void>();
