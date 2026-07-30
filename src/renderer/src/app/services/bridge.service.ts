@@ -70,6 +70,8 @@ export class BridgeService {
   /** Device + link state changes, newest first. */
   readonly timeline = signal<TimelineEntry[]>([]);
   /** Adapter enumerated but not openable (permissions, driver, or in use). */
+  /** App version, shown in the footer. */
+  readonly appVersion = signal('');
   readonly usbBlocked = signal(false);
   /** Raw error text behind usbBlocked, shown verbatim for diagnosis. */
   readonly usbBlockedDetail = signal<string | null>(null);
@@ -85,6 +87,7 @@ export class BridgeService {
     this.api = real ?? new MockBridge();
     this.platform = this.api.platform;
     this.api.onEvent((ev) => this.zone.run(() => this.apply(ev)));
+    void this.api.getVersion().then((v) => this.appVersion.set(v));
   }
 
   joinDirect(req: JoinDirectRequest): Promise<void> {
@@ -193,6 +196,10 @@ export class BridgeService {
 /** Plain-browser stand-in so every screen is developable with `ng serve`. */
 class MockBridge implements BridgeApi {
   readonly platform = 'linux';
+
+  async getVersion(): Promise<string> {
+    return '0.0.0-dev';
+  }
   private readonly listeners = new Set<(ev: BridgeEvent) => void>();
   private countersTimer: ReturnType<typeof setInterval> | null = null;
   private announceTimer: ReturnType<typeof setInterval> | null = null;

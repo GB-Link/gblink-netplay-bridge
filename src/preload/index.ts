@@ -16,6 +16,7 @@ const api: BridgeApi = {
   joinRelay: (req: JoinRelayRequest) => ipcRenderer.invoke(IPC.joinRelay, req) as Promise<void>,
   host: (req: HostRequest) => ipcRenderer.invoke(IPC.host, req) as Promise<void>,
   stop: () => ipcRenderer.invoke(IPC.stop) as Promise<void>,
+  getVersion: () => ipcRenderer.invoke(IPC.getVersion) as Promise<string>,
   lobbyRefresh: () => ipcRenderer.invoke(IPC.lobbyRefresh) as Promise<LobbyRoom[]>,
   lanScan: () => ipcRenderer.invoke(IPC.lanScan) as Promise<LobbyRoom[]>,
   getSettings: () => ipcRenderer.invoke(IPC.getSettings) as Promise<AppSettings>,

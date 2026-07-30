@@ -59,6 +59,7 @@ function main(): void {
     ipcMain.handle(IPC.joinRelay, (_e, req: JoinRelayRequest) => host.joinRelay(req));
     ipcMain.handle(IPC.host, (_e, req: HostRequest) => host.host(req));
     ipcMain.handle(IPC.stop, () => host.stop());
+    ipcMain.handle(IPC.getVersion, () => app.getVersion());
     ipcMain.handle(IPC.lobbyRefresh, () => fetchRooms());
     ipcMain.handle(IPC.lanScan, () => scanLan());
     ipcMain.handle(IPC.getSettings, () => settings.get());

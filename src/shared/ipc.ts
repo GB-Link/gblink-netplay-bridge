@@ -125,6 +125,7 @@ export interface BridgeApi {
   joinRelay(req: JoinRelayRequest): Promise<void>;
   host(req: HostRequest): Promise<void>;
   stop(): Promise<void>;
+  getVersion(): Promise<string>;
   lobbyRefresh(): Promise<LobbyRoom[]>;
   lanScan(): Promise<LobbyRoom[]>;
   getSettings(): Promise<AppSettings>;
@@ -140,6 +141,7 @@ export const IPC = {
   joinRelay: 'engine:joinRelay',
   host: 'engine:host',
   stop: 'engine:stop',
+  getVersion: 'app:version',
   lobbyRefresh: 'lobby:refresh',
   lanScan: 'lan:scan',
   getSettings: 'settings:get',

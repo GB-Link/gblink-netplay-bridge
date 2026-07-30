@@ -33,8 +33,13 @@ type Level = (typeof LEVELS)[number];
               {{ e.msg }}
             </span>
           } @else {
-            <span class="text-neutral-400">No log entries.</span>
+            <span class="min-w-0 flex-1 text-neutral-400">No log entries.</span>
           }
+        } @else {
+          <span class="min-w-0 flex-1"></span>
+        }
+        @if (bridge.appVersion(); as version) {
+          <span class="ml-auto shrink-0 text-neutral-400">Version {{ version }}</span>
         }
       </button>
 

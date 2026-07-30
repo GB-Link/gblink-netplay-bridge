@@ -31,8 +31,17 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  artifactName: ${name}-${version}-Windows-Setup.${ext}
+
+# Arch words are normalized to Intel / AppleSilicon / x86_64 afterwards.
+appImage:
+  artifactName: ${name}-${version}-Linux-${arch}.${ext}
+
+dmg:
+  artifactName: ${name}-${version}-macOS-${arch}.${ext}
 
 afterPack: scripts/afterPackMacSign.cjs
+afterAllArtifactBuild: scripts/afterAllArtifactBuild.cjs
 
 mac:
   target:
