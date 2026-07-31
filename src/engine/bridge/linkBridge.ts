@@ -6,6 +6,7 @@ import {
   type IGBLinkAdapter,
   type INetplayEndpoint,
   type LinkPhase,
+  type CableOverride,
   type PumpTimings,
   type Round,
 } from '../types';
@@ -113,6 +114,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     private readonly net: INetplayEndpoint,
     private readonly mode: BridgeMode,
     private readonly timings?: PumpTimings,
+    private readonly cableOverride: CableOverride = 'auto',
   ) {
     super();
     this.emitter = new PacedEmitter((state, words) => this.sendMpk1(state, words), timings);
@@ -202,6 +204,12 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
         throw new Error(`GB-Link firmware ${fw.major}.${fw.minor}.${fw.patch} is too old — 2.2.x or newer required`);
       }
       this.emit('log', `firmware ${fw.major}.${fw.minor}.${fw.patch}`);
+      // The firmware samples the cable at mode entry, so the override has to
+      // be in place before SetMode or it applies only to the next session.
+      await this.adapter.setCableOverride(this.cableOverride);
+      if (this.cableOverride !== 'auto') {
+        this.emit('log', `cable detection overridden: ${this.cableOverride.toUpperCase()} cable`);
+      }
       await this.adapter.initLinkMode(this.role);
       const cable = await this.adapter.getCableType().catch(() => -1);
       if (cable >= 0) {

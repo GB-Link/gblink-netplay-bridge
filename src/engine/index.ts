@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import {
   FwStatus,
+  type CableOverride,
   type CloseReason,
   type FirmwareVersion,
   type IGBLinkAdapter,
@@ -23,9 +24,10 @@ export { LinkBridge } from './bridge/linkBridge';
 export { GBLinkAdapter } from './usb/adapter';
 export { DeviceWatcher } from './usb/watcher';
 
-export type EngineStartOptions =
+export type EngineStartOptions = { cableOverride?: CableOverride } & (
   | ({ mode: 'join' } & NetplayJoinOptions)
-  | ({ mode: 'host' } & NetplayHostOptions);
+  | ({ mode: 'host' } & NetplayHostOptions)
+);
 
 export type SessionPhase =
   | 'idle'
@@ -101,7 +103,7 @@ export class GBLinkEngine extends EventEmitter<EngineEvents> {
     });
     endpoint.on('error', (e) => this.emit('error', e));
 
-    const bridge = new LinkBridge(adapter, endpoint, opts.mode, this.timings);
+    const bridge = new LinkBridge(adapter, endpoint, opts.mode, this.timings, opts.cableOverride);
     this.bridge = bridge;
     bridge.on('link-phase', (phase, raw) => this.emit('link-phase', phase, raw));
     bridge.on('cable', (cable) => this.emit('cable-type', cable));

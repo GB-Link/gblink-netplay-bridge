@@ -64,6 +64,7 @@ function main(): void {
     ipcMain.handle(IPC.lanScan, () => scanLan());
     ipcMain.handle(IPC.getSettings, () => settings.get());
     ipcMain.handle(IPC.setSettings, (_e, patch: Partial<AppSettings>) => settings.update(patch));
+    ipcMain.handle(IPC.resetSettings, () => settings.reset());
     ipcMain.handle(IPC.installUdevRule, () => installUdevRule());
     ipcMain.handle(IPC.openExternal, async (_e, url: string) => {
       const parsed = new URL(url);

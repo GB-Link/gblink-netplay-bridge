@@ -22,6 +22,7 @@ const api: BridgeApi = {
   getSettings: () => ipcRenderer.invoke(IPC.getSettings) as Promise<AppSettings>,
   setSettings: (patch: Partial<AppSettings>) =>
     ipcRenderer.invoke(IPC.setSettings, patch) as Promise<AppSettings>,
+  resetSettings: () => ipcRenderer.invoke(IPC.resetSettings) as Promise<AppSettings>,
   installUdevRule: () =>
     ipcRenderer.invoke(IPC.installUdevRule) as Promise<{ ok: boolean; detail?: string }>,
   openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,

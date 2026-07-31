@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { BridgeService } from '../services/bridge.service';
 import { UiStateService } from '../services/ui-state.service';
 import type { AppSettings } from '../../../../shared/ipc';
+import { normalizePort } from '../util/ports';
 
 @Component({
   selector: 'app-settings-modal',
@@ -59,6 +60,21 @@ import type { AppSettings } from '../../../../shared/ipc';
             </label>
           </div>
           <label class="mb-3 block text-sm">
+            <span class="mb-1 block text-neutral-600 dark:text-neutral-400">Link cable</span>
+            <select
+              [(ngModel)]="m.cableOverride"
+              class="w-full rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900"
+            >
+              <option value="auto">Automatic (detect)</option>
+              <option value="gba">GBA cable</option>
+              <option value="gbc">GBC cable</option>
+            </select>
+            <span class="mt-1 block text-xs text-neutral-500">
+              Set this if automatic detection picks the wrong cable. Takes effect on
+              the next connection.
+            </span>
+          </label>
+          <label class="mb-3 block text-sm">
             <span class="mb-1 block text-neutral-600 dark:text-neutral-400">Default relay</span>
             <select
               [(ngModel)]="m.relayDefault"
@@ -104,8 +120,24 @@ import type { AppSettings } from '../../../../shared/ipc';
               (click)="save()"
               class="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
             >Save</button>
-            @if (saved()) {
-              <span class="text-sm text-emerald-600 dark:text-emerald-400">Saved</span>
+            @if (confirmingReset()) {
+              <button
+                (click)="resetDefaults()"
+                class="rounded border border-red-500 px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
+              >Reset everything?</button>
+              <button
+                (click)="confirmingReset.set(false)"
+                class="rounded border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700"
+              >Cancel</button>
+            } @else {
+              <button
+                (click)="confirmingReset.set(true)"
+                class="rounded border border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              >Reset to defaults</button>
+            }
+            <span class="flex-1"></span>
+            @if (saved(); as what) {
+              <span class="text-sm text-emerald-600 dark:text-emerald-400">{{ what }}</span>
             }
           </div>
         } @else {
@@ -119,7 +151,8 @@ export class SettingsModal {
   protected readonly bridge = inject(BridgeService);
   private readonly ui = inject(UiStateService);
   protected readonly model = signal<AppSettings | null>(null);
-  protected readonly saved = signal(false);
+  protected readonly saved = signal<string | null>(null);
+  protected readonly confirmingReset = signal(false);
 
   readonly closed = output<void>();
 
@@ -130,12 +163,31 @@ export class SettingsModal {
   protected async save(): Promise<void> {
     const m = this.model();
     if (!m) return;
-    const result = await this.bridge.setSettings({ ...m });
+    const sanitized: AppSettings = {
+      ...m,
+      nick: m.nick.trim(),
+      defaultPort: normalizePort(m.defaultPort),
+      hostPort: normalizePort(m.hostPort, normalizePort(m.defaultPort)),
+    };
+    const result = await this.bridge.setSettings(sanitized);
     this.model.set({ ...result });
     // Keep the play card's shared nickname in step with the saved value.
     this.ui.nick.set(result.nick);
     this.ui.nickSeeded.set(true);
-    this.saved.set(true);
-    setTimeout(() => this.saved.set(false), 1500);
+    this.flash('Saved');
+  }
+
+  protected async resetDefaults(): Promise<void> {
+    this.confirmingReset.set(false);
+    const result = await this.bridge.resetSettings();
+    this.model.set({ ...result });
+    this.ui.nick.set(result.nick);
+    this.ui.nickSeeded.set(true);
+    this.flash('Reset to defaults');
+  }
+
+  private flash(text: string): void {
+    this.saved.set(text);
+    setTimeout(() => this.saved.set(null), 1500);
   }
 }

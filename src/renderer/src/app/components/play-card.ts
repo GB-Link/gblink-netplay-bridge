@@ -2,7 +2,11 @@ import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { BridgeService } from '../services/bridge.service';
 import { UiStateService } from '../services/ui-state.service';
-import type { RelayHandle } from '../../../../shared/ipc';
+import type { AppSettings, RelayHandle } from '../../../../shared/ipc';
+import { DEFAULT_NETPLAY_PORT, normalizePort } from '../util/ports';
+
+/** Shown to other players when the game name field is left blank. */
+const DEFAULT_GAME_NAME = 'Pokemon Ruby';
 
 type RelayChoice = RelayHandle | 'off';
 
@@ -101,6 +105,7 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
                 <input
                   type="number"
                   [(ngModel)]="relayPort"
+                  (blur)="relayPort = normalizePort(relayPort, defaultPort)"
                   class="w-28 rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700"
                 />
               </label>
@@ -136,6 +141,7 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
             <input
               type="number"
               [(ngModel)]="hostPort"
+              (blur)="hostPort = normalizePort(hostPort, defaultPort)"
               class="w-28 rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700"
             />
           </label>
@@ -219,13 +225,15 @@ export class PlayCard {
   protected readonly relayChoices = RELAY_CHOICES;
 
   // Join form.
+  protected readonly normalizePort = normalizePort;
+  private settingsLoaded = false;
   protected address = '';
   protected password = '';
   protected readonly relayOpen = signal(false);
   protected relayAddr = '';
   protected relayPort = 55435;
   protected relaySession = '';
-  private defaultPort = 55435;
+  protected defaultPort = 55435;
 
   // Host form.
   protected hostPort = 55435;
@@ -243,12 +251,15 @@ export class PlayCard {
         this.ui.nick.set(s.nick);
         this.ui.nickSeeded.set(true);
       }
-      this.defaultPort = s.defaultPort;
-      this.relayPort = s.defaultPort;
-      this.hostPort = s.defaultPort;
+      this.defaultPort = normalizePort(s.defaultPort);
+      this.relayPort = this.defaultPort;
+      this.hostPort = normalizePort(s.hostPort, this.defaultPort);
+      if (!this.address) this.address = s.lastAddress;
       if (!this.gameName) this.gameName = s.gameName;
       if (!this.gameCrc) this.gameCrc = s.gameCrc;
       this.relay = s.relayDefault;
+      this.announce = s.announce;
+      this.settingsLoaded = true;
     });
   }
 
@@ -282,14 +293,21 @@ export class PlayCard {
     }
   }
 
+  /** Persist the fields a player would otherwise retype every launch. */
+  private remember(patch: Partial<AppSettings>): void {
+    if (!this.settingsLoaded) return;
+    void this.bridge.setSettings(patch);
+  }
+
   private async tryConnect(): Promise<void> {
+    this.remember({ lastAddress: this.address.trim() });
     const nick = this.ui.effectiveNick();
     const password = this.password || undefined;
     const session = this.relaySession.trim();
     if (session) {
       await this.bridge.joinRelay({
         addr: this.relayAddr.trim() || this.address.trim(),
-        port: this.relayPort,
+        port: normalizePort(this.relayPort, this.defaultPort),
         session,
         nick,
         password,
@@ -301,9 +319,9 @@ export class PlayCard {
     const m = /^([^:]+):(\d{1,5})$/.exec(host);
     if (m) {
       host = m[1];
-      port = Number(m[2]);
+      port = normalizePort(m[2], this.defaultPort);
     }
-    await this.bridge.joinDirect({ host, port, nick, password });
+    await this.bridge.joinDirect({ host, port: normalizePort(port, this.defaultPort), nick, password });
   }
 
   protected crcValid(): boolean {
@@ -320,8 +338,18 @@ export class PlayCard {
   }
 
   private async hostSession(): Promise<void> {
+    const port = normalizePort(this.hostPort, this.defaultPort);
+    this.hostPort = port;
+    const gameName = this.gameName.trim() || DEFAULT_GAME_NAME;
+    this.remember({
+      hostPort: port,
+      announce: this.announce,
+      relayDefault: this.relay,
+      gameName,
+      gameCrc: this.gameCrc,
+    });
     await this.bridge.host({
-      port: this.hostPort,
+      port,
       nick: this.ui.effectiveNick(),
       password: this.hostPassword || undefined,
       spectatePassword: this.spectatePassword || undefined,
@@ -333,7 +361,7 @@ export class PlayCard {
               handle: this.relay,
               customAddr: this.relay === 'custom' ? this.customAddr.trim() : undefined,
             },
-      gameName: this.gameName.trim(),
+      gameName,
       gameCrc: this.gameCrc || undefined,
     });
   }

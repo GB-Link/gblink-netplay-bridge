@@ -3,6 +3,7 @@ import { DeviceWatcher, GBLinkEngine, type SessionPhase as EngineSessionPhase } 
 import { FwStatus, GPSP_CORE_VERSION, type CloseReason, type NetplayPeer } from '../engine/types';
 import {
   IPC,
+  type AppSettings,
   type BridgeEvent,
   type DeviceStateName,
   type HostRequest,
@@ -112,6 +113,7 @@ export class EngineHost {
     await this.startSession(() =>
       this.engine.start({
         mode: 'join',
+        cableOverride: this.settings.get().cableOverride,
         host: req.host,
         port: req.port,
         nick: req.nick,
@@ -127,6 +129,7 @@ export class EngineHost {
     await this.startSession(() =>
       this.engine.start({
         mode: 'join',
+        cableOverride: this.settings.get().cableOverride,
         host: req.addr,
         port: req.port,
         relaySession: req.session,
@@ -154,6 +157,7 @@ export class EngineHost {
     await this.startSession(() =>
       this.engine.start({
         mode: 'host',
+        cableOverride: this.settings.get().cableOverride,
         port: req.port,
         nick: req.nick,
         password: req.password,

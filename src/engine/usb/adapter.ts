@@ -1,6 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { FwStatus } from '../types';
-import type { AdapterEvents, AdapterRole, FirmwareVersion, IGBLinkAdapter } from '../types';
+import { CABLE_OVERRIDE_VALUE, FwStatus } from '../types';
+import type {
+  AdapterEvents,
+  AdapterRole,
+  CableOverride,
+  FirmwareVersion,
+  IGBLinkAdapter,
+} from '../types';
 import { UsbTransport } from './device';
 import type { ILinkTransport } from './device';
 
@@ -11,6 +17,7 @@ const CMD_SET_MODE_MASTER = 0x10;
 const CMD_SET_MODE_SLAVE = 0x11;
 const CMD_START_HANDSHAKE = 0x12;
 const CMD_CONNECT_LINK = 0x13;
+const CMD_SET_CABLE_OVERRIDE = 0x49;
 const CMD_GET_CABLE_TYPE = 0x4a;
 
 const MODE_GBA_LINK = 0x01;
@@ -73,6 +80,10 @@ export class GBLinkAdapter extends EventEmitter<AdapterEvents> implements IGBLin
 
   async connectLink(): Promise<void> {
     await this.transport.sendCommand([CMD_CONNECT_LINK]);
+  }
+
+  async setCableOverride(mode: CableOverride): Promise<void> {
+    await this.transport.sendCommand([CMD_SET_CABLE_OVERRIDE, CABLE_OVERRIDE_VALUE[mode]]);
   }
 
   async cancel(): Promise<void> {

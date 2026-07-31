@@ -20,6 +20,16 @@ export enum FwStatus {
  */
 export type AdapterRole = 'master' | 'slave';
 
+/** Manual cable selection; 'auto' leaves the firmware's own detection alone. */
+export type CableOverride = 'auto' | 'gba' | 'gbc';
+
+/** Wire values for the firmware's SetCableOverride (0x49) command. */
+export const CABLE_OVERRIDE_VALUE: Record<CableOverride, number> = {
+  auto: 0,
+  gba: 1,
+  gbc: 2,
+};
+
 export interface FirmwareVersion {
   major: number;
   minor: number;
@@ -52,6 +62,8 @@ export interface IGBLinkAdapter extends EventEmitter<AdapterEvents> {
   connectLink(): Promise<void>;
   /** 0x01 — abort the running mode. */
   cancel(): Promise<void>;
+  /** 0x49 — pin-path override; must precede mode entry to take effect. */
+  setCableOverride(mode: CableOverride): Promise<void>;
   /** Write exactly 64 bytes (4 rounds x 8 u16 LE) to the data OUT endpoint. */
   writeRounds(buf: Buffer): Promise<void>;
   getFirmwareInfo(): Promise<FirmwareVersion>;

@@ -1,6 +1,6 @@
 {
   "name": "gblink-netplay-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Bridge a GB-Link USB adapter (real GBA) into RetroArch netplay sessions with gpsp players (Pokemon Gen 3 link cable).",

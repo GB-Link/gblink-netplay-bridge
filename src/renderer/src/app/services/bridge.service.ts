@@ -116,6 +116,9 @@ export class BridgeService {
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
     return this.api.setSettings(patch);
   }
+  resetSettings(): Promise<AppSettings> {
+    return this.api.resetSettings();
+  }
   installUdevRule(): Promise<{ ok: boolean; detail?: string }> {
     return this.api.installUdevRule();
   }
@@ -205,6 +208,21 @@ export class BridgeService {
   }
 }
 
+const MOCK_DEFAULT_SETTINGS: AppSettings = {
+    nick: 'Anonymous',
+    defaultPort: 55435,
+    cableOverride: 'auto',
+    lastAddress: '',
+    hostPort: 55435,
+    announce: true,
+    gameName: 'Pokemon Ruby',
+    gameCrc: '',
+    relayDefault: 'off',
+    lanDiscovery: true,
+    theme: 'system',
+    logLevel: 'info',
+  };
+
 /** Plain-browser stand-in so every screen is developable with `ng serve`. */
 class MockBridge implements BridgeApi {
   readonly platform = 'linux';
@@ -217,16 +235,7 @@ class MockBridge implements BridgeApi {
   private announceTimer: ReturnType<typeof setInterval> | null = null;
   private tx = 0;
   private rx = 0;
-  private settings: AppSettings = {
-    nick: 'Anonymous',
-    defaultPort: 55435,
-    gameName: 'Pokemon - Emerald Version (USA)',
-    gameCrc: '1F1C08FB',
-    relayDefault: 'off',
-    lanDiscovery: false,
-    theme: 'system',
-    logLevel: 'info',
-  };
+  private settings: AppSettings = { ...MOCK_DEFAULT_SETTINGS };
 
   constructor() {
     this.script();
@@ -393,7 +402,7 @@ class MockBridge implements BridgeApi {
       {
         ...base,
         username: 'MayEmerald',
-        gameName: 'Pokemon - Emerald Version (USA)',
+        gameName: 'Pokemon Ruby',
         gameCrc: 0x1f1c08fb,
         ip: '198.51.100.7',
         port: 55435,
@@ -468,7 +477,7 @@ class MockBridge implements BridgeApi {
     return [
       {
         username: 'CouchCoop',
-        gameName: 'Pokemon - Emerald Version (USA)',
+        gameName: 'Pokemon Ruby',
         gameCrc: 0x1f1c08fb,
         coreName: 'gpSP',
         coreVersion: 'v1.1.0',
@@ -494,6 +503,11 @@ class MockBridge implements BridgeApi {
   }
 
   async getSettings(): Promise<AppSettings> {
+    return { ...this.settings };
+  }
+
+  async resetSettings(): Promise<AppSettings> {
+    this.settings = { ...MOCK_DEFAULT_SETTINGS };
     return { ...this.settings };
   }
 

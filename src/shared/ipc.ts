@@ -62,6 +62,14 @@ export interface LobbyRoom {
 export interface AppSettings {
   nick: string;
   defaultPort: number;
+  /** Manual link-cable selection; 'auto' uses the firmware's detection. */
+  cableOverride: 'auto' | 'gba' | 'gbc';
+  /** Last address typed into Join, restored on next launch. */
+  lastAddress: string;
+  /** Last port used for hosting. */
+  hostPort: number;
+  /** Whether hosting announces to the public lobby. */
+  announce: boolean;
   gameName: string;
   gameCrc: string;
   relayDefault: RelayHandle | 'off';
@@ -130,6 +138,7 @@ export interface BridgeApi {
   lanScan(): Promise<LobbyRoom[]>;
   getSettings(): Promise<AppSettings>;
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
+  resetSettings(): Promise<AppSettings>;
   installUdevRule(): Promise<{ ok: boolean; detail?: string }>;
   openExternal(url: string): Promise<void>;
   copyText(text: string): Promise<void>;
@@ -146,6 +155,7 @@ export const IPC = {
   lanScan: 'lan:scan',
   getSettings: 'settings:get',
   setSettings: 'settings:set',
+  resetSettings: 'settings:reset',
   installUdevRule: 'app:installUdevRule',
   openExternal: 'app:openExternal',
   copyText: 'app:copyText',

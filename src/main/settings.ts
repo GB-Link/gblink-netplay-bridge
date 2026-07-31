@@ -6,6 +6,10 @@ import type { AppSettings } from '../shared/ipc';
 export const DEFAULT_SETTINGS: AppSettings = {
   nick: 'Anonymous',
   defaultPort: 55435,
+  cableOverride: 'auto',
+  lastAddress: '',
+  hostPort: 55435,
+  announce: true,
   gameName: 'Pokemon Ruby',
   gameCrc: '',
   relayDefault: 'off',
@@ -33,6 +37,14 @@ export class SettingsStore {
 
   update(patch: Partial<AppSettings>): AppSettings {
     const next: AppSettings = { ...this.get(), ...pickKnown(patch) };
+    this.cached = next;
+    this.save(next);
+    return next;
+  }
+
+  /** Restore every setting to its shipped default. */
+  reset(): AppSettings {
+    const next: AppSettings = { ...DEFAULT_SETTINGS };
     this.cached = next;
     this.save(next);
     return next;
