@@ -55,6 +55,11 @@ type Level = (typeof LEVELS)[number];
                   : 'border-neutral-300 text-neutral-400 dark:border-neutral-700'"
               >{{ level }}</button>
             }
+            <span class="flex-1"></span>
+            <button
+              (click)="copyLog()"
+              class="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >{{ copied() ? 'Copied' : 'Copy log' }}</button>
           </div>
           <ul class="max-h-56 overflow-y-auto font-mono text-xs">
             @for (entry of filteredLog(); track entry.ts + entry.msg) {
@@ -80,6 +85,7 @@ export class LogDrawer {
   protected readonly bridge = inject(BridgeService);
   protected readonly levels = LEVELS;
   protected readonly open = signal(false);
+  protected readonly copied = signal(false);
   protected readonly enabledLevels = signal<Set<Level>>(new Set(LEVELS));
 
   protected readonly lastEntry = computed(() => this.bridge.log()[0] ?? null);
@@ -91,6 +97,16 @@ export class LogDrawer {
     const enabled = this.enabledLevels();
     return this.bridge.log().filter((e) => enabled.has(e.level));
   });
+
+  /** The shown entries, oldest first, as text for a bug report. */
+  protected async copyLog(): Promise<void> {
+    const lines = [...this.filteredLog()]
+      .reverse()
+      .map((e) => `${new Date(e.ts).toISOString().slice(11, 23)} ${e.level.padEnd(5)} ${e.msg}`);
+    await this.bridge.copyText(lines.join('\n'));
+    this.copied.set(true);
+    setTimeout(() => this.copied.set(false), 1500);
+  }
 
   protected toggleLevel(level: Level): void {
     this.enabledLevels.update((set) => {

@@ -1,41 +1,43 @@
 # GBLink Netplay Bridge
 
-Play Generation 3 Pokémon link cable on a **real GBA** against emulator players, over **RetroArch netplay**.
+Play Generation 3 Pokémon — by link cable or Wireless Adapter — and Advance Wars 1/2 VS link on a **real GBA**, or Pokémon FireRed and LeafGreen on a **Nintendo Switch**, against emulator players over **RetroArch netplay**.
 
-This is a desktop app. It talks to a real GBA through a GB-Link adapter on one side and speaks the RetroArch netplay protocol on the other, appearing to the network as a regular RetroArch + gpsp player. The RetroArch players need no extra software.
+This is a desktop app. On one side it talks to a GB-Link adapter (a GBA) or an ESP32 bridge board (a Switch); on the other it speaks the RetroArch netplay protocol, appearing to the network as a regular RetroArch + gpsp player. Hardware and emulator players are interchangeable: any mix of real GBAs, Switches and RetroArch players can share a session. The RetroArch players need no extra software.
 
-Currently supports the following games:
-Pokémon Fire Red
-Pokémon Leaf Green
-Pokémon Ruby
-Pokémon Sapphire 
-Pokémon Emerald
+| Console | Game | Link |
+| --- | --- | --- |
+| Game Boy Advance (GB-Link) | Pokémon Ruby, Sapphire, Emerald, FireRed, LeafGreen | Link cable, Wireless Adapter |
+| Game Boy Advance (GB-Link) | Advance Wars, Advance Wars 2: Black Hole Rising | Link cable |
+| Nintendo Switch (ESP32 bridge) | Pokémon FireRed, LeafGreen | Wireless Adapter, link cable |
 
 ## Features
 
 - **Join** a session: direct IP, from the public lobby browser, or through a RetroArch relay (MITM) server
 - **Host** a session: direct, with optional public-lobby announcement and LAN discovery, or through a relay
+- **Wireless Adapter** sessions take up to five players on the same network or over a direct connection: a GBA or Switch can lead a room that RetroArch players join, or join a room one of them leads, exactly as between two wireless adapters
+- **Switch over the link cable**: the Switch's wireless link is turned into the cable protocol, so a Switch trades and battles with Ruby and Sapphire players too
 
 ## Requirements
 
-- GB-Link USB adapter with firmware **2.2.2 or newer**. Either a GBA or a GBC link cable works (the firmware auto-detects which pin carries SD); with a GBA cable, plug its **small (master) connector** into the adapter
-- A real GBA with a gen 3 Pokémon cartridge
-- RetroArch peers must run the **gpsp** core with the core option
-  **`Link Cable Connectivity` = `Link Cable - Pokemon Gen3 mode`** .
-  On Emerald / FireRed / LeafGreen, gpsp's *Automatic* setting selects the Wireless Adapter (RFU) instead, which is incompatible with cable play, so the option must be set explicitly. Ruby/Sapphire auto-select cable mode.
+- For a GBA: a GB-Link USB adapter with firmware **2.2.3 or newer** for the link cable games and **2.2.7 or newer** for the Wireless Adapter (update from the GBLink launcher). For the cable games either a GBA or a GBC link cable works (the firmware auto-detects which pin carries SD); with a GBA cable, plug its **small (master) connector** into the adapter. If detection ever picks the wrong cable, pin the selection in Settings → Link cable — it is stored on the adapter itself and applies to every mode. The Wireless Adapter mode needs a **Game Boy Color link cable**.
+- For a Switch: an ESP32 board (ESP32-S3 recommended) running the bridge firmware from [GB-Link-Switch-LDN](https://github.com/GB-Link/GB-Link-Switch-LDN), **2.1.5 or newer**, with your Switch's keys stored on it. Set it up once at <https://switch.gblink.io> (install the firmware, drop your `prod.keys` on the page); this app then only needs the board on USB. Close that page before playing: a browser tab holding the board's port keeps this app from opening it. Boards with native USB (ESP32-S3, C3, C6) are found as soon as they are plugged in; a classic ESP32 behind a USB-serial chip is found when a Switch session starts, so plug it in first (each USB-serial port is tried once per session).
+- RetroArch peers must run the **gpsp** core with `Link Cable Connectivity` set to match the session (the play card names the option):
+  `Link Cable - Pokemon Gen3 mode` for a cable session, `GBA Wireless Adapter` for a wireless one, `Link Cable - Advance Wars 1/2 mode` for Advance Wars. gpsp's *Automatic* setting picks the Wireless Adapter on Emerald / FireRed / LeafGreen and the cable on Ruby / Sapphire, and for Advance Wars works for US/EU carts (game codes AWRE/AWRP/AW2E/AW2P); Japanese carts need the mode set explicitly. gpsp reads the option only when a game is loaded: after changing it, close the content and load the game again (Restart is not enough). To check it in Advance Wars, open the Link screen with netplay off: a 1P icon appears only when the Advance Wars mode is on.
 
 ## Playing
 
-1. Plug in the adapter — the Device panel shows its firmware once detected.
-2. Join a session (direct address or lobby browser) or start hosting.
-3. Both players go to the Cable Club upstairs in any Pokémon Center and talk to the attendant — in either order. If one game stops waiting before the other player arrives, just talk to the attendant again.
-4. Trade and battle as usual. Between activities the link renegotiates automatically; brief "Linking…" states are normal.
+1. Plug in the adapter or the ESP32 board — the status bar shows each one it finds.
+2. Pick the console and the game on the play card, then join a session (direct address or lobby browser) or start hosting. Lobby rooms with a recognised game name pre-select the game; a Pokémon room keeps your cable/wireless choice, so pick the one the host is using.
+3. **Pokémon by link cable (GBA):** both players go to the Cable Club upstairs in any Pokémon Center and talk to the attendant — in either order. If one game stops waiting before the other player arrives, just talk to the attendant again. Trade and battle as usual; between activities the link renegotiates automatically and brief "Linking…" states are normal.
+4. **Pokémon by Wireless Adapter (GBA or Switch):** go to the Direct Corner (the Wireless Communication menu on a GBA; upstairs in a Pokémon Center on the Switch) at any time during the session. Lead a Trade Center or Colosseum group, or join one another player leads — the room list shows the others' groups as it does between wireless adapters. Up to five players share a session; a Switch leads or joins one room at a time. When a player leaves a group the Switch leads, the Switch still counts them: the next player to join takes their place, and if they cannot link, leave the group on the Switch and lead it again. Wireless sessions don't go through a relay, which adds more delay than the games can take: play on the same network, or connect straight to the host's address, with their port forwarded or over a virtual LAN such as Tailscale or ZeroTier. A RetroArch player hosting a wireless session turns off `Use Relay Server` too.
+5. **Pokémon by link cable (Switch):** the bridge plays the cable protocol for the Switch. When **hosting**, lead a Trade Center or Colosseum group on the Switch; the other player talks to the Cable Club attendant and the bridge joins the Switch's group. When **joining**, pick on the play card which room the Switch will use (Trade Center, single or double battle), then on the Switch join the group the bridge opens; the other player talks to the attendant for the same room. After each visit, leave the group on the Switch: a group the Switch leads cannot be joined again until it is led anew, and the bridge opens a fresh group once the Switch has left its last one. The National Dex bypass lets the Switch link with Emerald (and Ruby or Sapphire by cable) before the Sevii Islands story and the National Dex, as the Switch page does; leave it off when the other players run FireRed or LeafGreen, who would then see the Switch as an Emerald.
+6. **Advance Wars:** start the bridge session before opening the link menu on the GBA, as on Celio (if the GBA is already on the VS Link screen, back out and open it again once the session is up). The RetroArch player joins the session before opening their Link screen too. Host from the bridge when you can, so your GBA is player 1 and presses Start: when a RetroArch player presses Start in the Link screen, RetroArch now and then closes. From then on play as many VS Link matches as you like and send maps freely without leaving the netplay session, exactly like a RetroArch player: the adapter stays armed for the whole session. Strictly 2 players; when joining, the bridge must be the only (first) joiner; when hosting, your GBA is player 1. A "partner quiet" state is informational — the link stays up.
 
 ## Linux USB permissions
 
-Install the udev rule (the app offers to do this for you) or run the permission script included with the firmware.
+Install the udev rule (the app offers to do this for you) or run the permission script included with the firmware. The ESP32 board's serial port needs your user in the `dialout` group (`uucp` on Arch). If the board's port is reported lost right after another serial program used it, unplug the board and plug it back in.
 
-Windows and macOS need no drivers (the firmware carries MS OS 2.0 descriptors; WinUSB binds automatically).
+Windows and macOS need no drivers (the firmware carries MS OS 2.0 descriptors; WinUSB binds automatically; the ESP32's USB serial port is standard).
 
 ## macOS first launch
 
@@ -45,21 +47,31 @@ Builds are not notarized. On first launch macOS will block the app: open **Syste
 
 ```
 npm install                # engine + electron toolchain
-npm run typecheck          # engine
+npm run typecheck          # engine + tests
 npm run typecheck:main     # electron main/preload
-npm run cli -- probe       # hardware smoke test: init sequence + firmware/cable report
-npm run cli -- join <host[:port]> --nick Ash
-npm run cli -- host --port 55435 --nick Brock
+npm test                   # vitest: framing, bridge FSMs, netplay interop
+npm run cli -- probe --game rfu            # hardware smoke test: mode entry + firmware/cable report
+npm run cli -- probe-esp                   # ESP32 bridge: firmware, keys, bridge status
+npm run cli -- join <host[:port]> --nick Ash --game gen3
+npm run cli -- host --port 55435 --nick Brock --game rfu --console switch --national-bypass
+npm run cli -- join <host> --game gen3 --console switch --room single
 
 cd src/renderer && npm install && npm start   # GUI dev server (mock bridge in plain browser)
 npm run dev                # electron shell against the dev server (GBLINK_DEV=1)
 npm run build:main && npx electron-builder    # package installers
 ```
 
-Layout: `src/engine/` is an Electron-free Node library (netplay protocol client/host, USB layer, and the LinkBridge state machine that translates firmware link statuses into gpsp's MPK1 protocol), `src/main/` + `src/preload/` are the Electron shell, and `src/renderer/` is the Angular GUI.
+Layout: `src/engine/` is an Electron-free Node library — the netplay protocol client/host, the USB layer, the gen3 `LinkBridge` that speaks gpsp's MPK1 cable protocol, `src/engine/aw/` (the MAW1 framing plus the Advance Wars `AwLinkBridge` that relays the firmware's protocol proxy as exact gpsp netpackets), `src/engine/rfu/` (the RFU1 framing of gpsp's Wireless Adapter netpackets, the `RfuLinkBridge` that addresses one adapter's frames to the right netplay clients, and the two devices that speak it: the GB-Link's wireless mode and the ESP32 bridge's host port), `src/engine/esp32/` (the ESP32 console protocol over a serial port) and `src/engine/switch/` (the Switch page's wireless-to-cable translators, vendored from GB-Link-Switch-LDN, behind a virtual adapter so the gen3 `LinkBridge` drives a Switch like a GBA). `src/main/` + `src/preload/` are the Electron shell, `src/renderer/` is the Angular GUI, and `test/` is the vitest suite (unit + loopback netplay interop against ports of gpsp's serial state machines and the Switch page's game fakes).
+
+Advance Wars CLI extras: `--stats` (print the firmware's GetAwStats counters, on firmware built with them), and `--aw-pxg-us` / `--aw-sync-us` (master-mode round pacing, honoured only by firmware with the proxy's tuning support).
 
 ## References
 
 - [GBLink-Firmware](https://github.com/GB-Link/GBLink-Firmware) — the adapter firmware this app drives
-- [gpsp](https://github.com/libretro/gpsp) — the GBA core whose link protocol the bridge speaks
+- [GB-Link-Switch-LDN](https://github.com/GB-Link/GB-Link-Switch-LDN) — the ESP32 bridge firmware, the Switch page and the cable translators
+- [gpsp](https://github.com/libretro/gpsp) — the GBA core whose link protocols the bridge speaks
 - [RetroArch](https://github.com/libretro/RetroArch) — the netplay transport
+
+## Third-party code
+
+`src/engine/switch/vendor/` holds the Switch page's translators unchanged (GB-Link-Switch-LDN, AGPL-3.0); `translator.js` there is MPL-2.0, ported from [mgba_LDN](https://github.com/Gr3nSkyDragon/mgba_LDN).

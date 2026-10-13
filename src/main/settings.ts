@@ -2,11 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 import type { AppSettings } from '../shared/ipc';
+import { isConsole, isLinkGame, isSwitchRoom } from '../shared/games';
 
 export const DEFAULT_SETTINGS: AppSettings = {
   nick: 'Anonymous',
   defaultPort: 55435,
-  cableOverride: 'auto',
+  game: 'gen3',
+  console: 'gba',
+  switchRoom: 'trade',
+  nationalBypass: false,
   lastAddress: '',
   hostPort: 55435,
   announce: true,
@@ -24,6 +28,10 @@ function pickKnown(patch: Partial<AppSettings>): Partial<AppSettings> {
     const value = patch[key];
     if (value !== undefined) out[key] = value;
   }
+  if (out['game'] !== undefined && !isLinkGame(out['game'])) delete out['game'];
+  if (out['console'] !== undefined && !isConsole(out['console'])) delete out['console'];
+  if (out['switchRoom'] !== undefined && !isSwitchRoom(out['switchRoom'])) delete out['switchRoom'];
+  if (out['nationalBypass'] !== undefined && typeof out['nationalBypass'] !== 'boolean') delete out['nationalBypass'];
   return out as Partial<AppSettings>;
 }
 

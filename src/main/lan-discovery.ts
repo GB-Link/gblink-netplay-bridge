@@ -1,6 +1,7 @@
 import dgram from 'node:dgram';
 import { readFixedString, writeFixedString } from '../engine/netplay/messages';
 import type { LobbyRoom } from '../shared/ipc';
+import { gameFromRoomName } from '../shared/games';
 
 /** RetroArch LAN discovery: 4-byte "RANQ" query, 688-byte "RANS" reply. */
 const DISCOVERY_PORT = 55435;
@@ -99,6 +100,7 @@ export function scanLan(timeoutMs = 1200): Promise<LobbyRoom[]> {
         playerCount: 0,
         spectatorCount: 0,
         joinable: coreName.toLowerCase() === 'gpsp',
+        game: gameFromRoomName(readFixedString(msg, 176, 256)) ?? undefined,
         lan: true,
       };
       found.set(`${room.ip}:${room.port}`, room);

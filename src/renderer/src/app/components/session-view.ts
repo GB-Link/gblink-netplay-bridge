@@ -1,5 +1,6 @@
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { BridgeService } from '../services/bridge.service';
+import { UiStateService } from '../services/ui-state.service';
 import { closeReasonText, linkStatusText, sessionStatusText } from '../copy/state-copy';
 
 @Component({
@@ -72,9 +73,7 @@ import { closeReasonText, linkStatusText, sessionStatusText } from '../copy/stat
         <div
           class="w-96 rounded-lg border border-neutral-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
         >
-          <div class="mb-3 text-sm">
-            A trade may be in progress — disconnecting now can lose Pokémon. Disconnect anyway?
-          </div>
+          <div class="mb-3 text-sm">{{ confirmText() }}</div>
           <div class="flex justify-end gap-2">
             <button
               (click)="confirmOpen.set(false)"
@@ -92,6 +91,7 @@ import { closeReasonText, linkStatusText, sessionStatusText } from '../copy/stat
 })
 export class SessionView {
   protected readonly bridge = inject(BridgeService);
+  private readonly ui = inject(UiStateService);
   protected readonly confirmOpen = signal(false);
   protected readonly copied = signal(false);
 
@@ -118,24 +118,53 @@ export class SessionView {
   }
 
   protected linkText(): string {
+    // A session that ended for a reason (a wrong password, a full room) says so first.
+    const reason = this.bridge.closeReason();
+    if (this.bridge.sessionPhase() === 'closed' && reason && reason !== 'graceful') return closeReasonText(reason);
     const peers = this.bridge.peers();
-    return linkStatusText(this.bridge.linkPhase(), peers.length, peers[0]?.nick);
+    return linkStatusText(
+      this.bridge.linkPhase(),
+      peers.length,
+      peers[0]?.nick,
+      this.bridge.game(),
+      this.bridge.console(),
+      this.bridge.room(),
+      this.bridge.joining(),
+    );
+  }
+
+  protected confirmText(): string {
+    const game = this.bridge.game();
+    return game === 'gen3' || game === 'rfu'
+      ? 'A trade may be in progress — disconnecting now can lose Pokémon. Disconnect anyway?'
+      : 'A match may be in progress — disconnecting drops the link on both sides. Disconnect anyway?';
   }
   protected sessionText(): string {
     return sessionStatusText(this.bridge.sessionPhase(), this.bridge.peers().length);
   }
   protected closeText(): string | null {
     const reason = this.bridge.closeReason();
+    // Shown as the headline already when it is the reason the session ended.
+    if (reason && reason !== 'graceful' && this.bridge.sessionPhase() === 'closed') return null;
     return reason ? closeReasonText(reason) : null;
   }
 
   protected bannerClass(): string {
+    const reason = this.bridge.closeReason();
+    if (this.bridge.sessionPhase() === 'closed' && reason && reason !== 'graceful') {
+      return 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-100';
+    }
     switch (this.bridge.linkPhase()) {
       case 'connected':
+      case 'linked':
+      case 'room-open':
         return 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100';
       case 'searching':
       case 'cable-club':
       case 'handshake':
+      case 'init':
+      case 'starting':
+      case 'partner-quiet':
         return 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-100';
       case 'closing':
       case 'closed':
@@ -153,7 +182,10 @@ export class SessionView {
           ? `Announced to the public lobby (room #${a.roomId})`
           : 'Announced to the public lobby';
       case 'not-connectable':
-        return 'Announced, but the lobby could not reach your port — players may be unable to join directly. Consider hosting through a relay.';
+        // Wireless Adapter games can't take a relay's delay.
+        return this.ui.game() === 'rfu'
+          ? 'Announced, but the lobby could not reach your port — players outside your network may be unable to join until you forward it.'
+          : 'Announced, but the lobby could not reach your port — players may be unable to join directly. Consider hosting through a relay.';
       case 'failed':
         return 'Lobby announce failed — the room is not listed publicly.';
       default:
@@ -181,8 +213,12 @@ export class SessionView {
   }
 
   protected stopClicked(): void {
-    if (this.bridge.linkPhase() === 'connected') this.confirmOpen.set(true);
-    else void this.bridge.stop();
+    const phase = this.bridge.linkPhase();
+    if (phase === 'connected' || phase === 'linked' || phase === 'partner-quiet' || phase === 'room-open') {
+      this.confirmOpen.set(true);
+    } else {
+      void this.bridge.stop();
+    }
   }
 
   protected doStop(): void {

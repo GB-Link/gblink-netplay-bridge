@@ -1,4 +1,5 @@
 import type { LobbyRoom } from '../shared/ipc';
+import { gameFromRoomName } from '../shared/games';
 
 export const LOBBY_BASE = 'http://lobby.libretro.com/';
 
@@ -102,6 +103,7 @@ function normalizeRoom(item: unknown): LobbyRoom | null {
       connectable &&
       coreName.toLowerCase() === 'gpsp' &&
       versionAtLeast(retroarchVersion, '1.9.1'),
+    game: gameFromRoomName(asString(f['game_name'])) ?? undefined,
   };
 }
 

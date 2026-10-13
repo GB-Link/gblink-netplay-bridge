@@ -8,7 +8,7 @@ import type {
   NetplayHostOptions,
   NetplayPeer,
 } from '../types';
-import { GPSP_NETPACKET_VERSION } from '../types';
+import { GPSP_NETPACKET_VERSION, NETPACKET_BROADCAST } from '../types';
 import {
   HIGH_PROTOCOL,
   LOW_PROTOCOL,
@@ -39,8 +39,9 @@ import {
 import { WireBuffer, writeFrame, writeNetpacketFrame, type WireFrame } from './wire';
 
 const PENDING_LINK_TIMEOUT_MS = 15000;
+/** Round trips kept per client: about 15 s at RetroArch's ping every 3 s. */
+const RTT_SAMPLES = 5;
 const MAX_PENDING_LINKS = 8;
-const NETPACKET_BROADCAST = 0xffff;
 const HEADER_LEN = 24;
 const INFO_PAYLOAD_LEN = 68;
 
@@ -59,6 +60,9 @@ interface Conn {
   playing: boolean;
   established: boolean;
   dead: boolean;
+  /** Send time of the unanswered PING_REQUEST. */
+  pingSentAt: number | null;
+  rtts: number[];
 }
 
 function refusedPayload(reason: ModeRefusedReason): Buffer {
@@ -119,14 +123,24 @@ export class NetplayHost extends EventEmitter<NetplayEvents> implements INetplay
     return this.peers;
   }
 
+  peerRttMs(id: number): number | undefined {
+    for (const conn of this.conns.values()) {
+      if (conn.id !== id || conn.rtts.length === 0) continue;
+      const sorted = [...conn.rtts].sort((a, b) => a - b);
+      return sorted[sorted.length >> 1];
+    }
+    return undefined;
+  }
+
   listen(): Promise<void> {
     return this.opts.relay ? this.listenRelay() : this.listenDirect();
   }
 
-  sendPacket(buf: Buffer): void {
+  sendPacket(buf: Buffer, dest: number = NETPACKET_BROADCAST): void {
     if (this.torndown) return;
     const frame = writeNetpacketFrame(0, buf);
     for (const conn of this.conns.values()) {
+      if (dest !== NETPACKET_BROADCAST && conn.id !== dest) continue;
       if (conn.playing && !conn.sock.destroyed) conn.sock.write(frame);
     }
   }
@@ -153,7 +167,10 @@ export class NetplayHost extends EventEmitter<NetplayEvents> implements INetplay
         server.off('error', onBindError);
         server.on('error', (e) => this.emit('error', e));
         this._localClientId = 0;
-        this.emit('host-ready', { extPort: this.opts.port });
+        // Report the bound port: port 0 asks the OS for an ephemeral one.
+        const addr = server.address();
+        const extPort = addr !== null && typeof addr === 'object' ? addr.port : this.opts.port;
+        this.emit('host-ready', { extPort });
         this.emit('session-start', 0);
         resolve();
       });
@@ -183,6 +200,8 @@ export class NetplayHost extends EventEmitter<NetplayEvents> implements INetplay
       playing: false,
       established: false,
       dead: false,
+      pingSentAt: null,
+      rtts: [],
     };
     this.conns.set(index, conn);
     sock.on('data', (chunk: Buffer) => {
@@ -385,7 +404,17 @@ export class NetplayHost extends EventEmitter<NetplayEvents> implements INetplay
         // RA never pings on a timer: it answers, then immediately requests
         // its own ping back on protocol 6+ (netplay_frontend.c:6597-6604).
         conn.sock.write(writeFrame(NetplayCmd.PING_RESPONSE));
-        if (conn.protocol >= 6) conn.sock.write(writeFrame(NetplayCmd.PING_REQUEST));
+        if (conn.protocol >= 6) {
+          conn.sock.write(writeFrame(NetplayCmd.PING_REQUEST));
+          conn.pingSentAt = Date.now();
+        }
+        return;
+      case NetplayCmd.PING_RESPONSE:
+        if (conn.pingSentAt !== null) {
+          conn.rtts.push(Date.now() - conn.pingSentAt);
+          if (conn.rtts.length > RTT_SAMPLES) conn.rtts.shift();
+          conn.pingSentAt = null;
+        }
         return;
       case NetplayCmd.PLAYER_CHAT:
         this.handleChat(conn, frame);
@@ -395,7 +424,7 @@ export class NetplayHost extends EventEmitter<NetplayEvents> implements INetplay
         this.killConn(conn);
         return;
       default:
-        return; /* PAUSE/RESUME/PING_RESPONSE/anything else: ignore */
+        return; /* PAUSE/RESUME/anything else: ignore */
     }
   }
 

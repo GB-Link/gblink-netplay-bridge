@@ -1,7 +1,7 @@
 import { Component, inject, output, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { BridgeService, UDEV_RULE_PATH, UDEV_RULE_TEXT } from '../services/bridge.service';
-import { cableTypeText, deviceStateText, firmwareText } from '../copy/state-copy';
+import { cableSelectionText, cableTypeText, deviceStateText, firmwareText } from '../copy/state-copy';
 
 @Component({
   selector: 'app-device-drawer',
@@ -28,10 +28,34 @@ import { cableTypeText, deviceStateText, firmwareText } from '../copy/state-copy
             class="mb-4 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
           >
             <div class="text-base font-medium">{{ stateText() }}</div>
-            <div class="mt-2 flex gap-6 text-sm text-neutral-600 dark:text-neutral-400">
+            <div class="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm text-neutral-600 dark:text-neutral-400">
               <span>Firmware: {{ fwText() }}</span>
-              <span>Cable: {{ cableText() }}</span>
+              <span>Cable: {{ selectionText() }}</span>
+              <span>Sampled: {{ cableText() }}</span>
             </div>
+          </section>
+
+          <section
+            class="mb-4 rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
+          >
+            <h3 class="mb-1 text-sm font-semibold text-neutral-500 dark:text-neutral-400">ESP32 bridge (Switch)</h3>
+            <div class="text-base font-medium">{{ espStateText() }}</div>
+            @if (bridge.esp32().state === 'present') {
+              <div class="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm text-neutral-600 dark:text-neutral-400">
+                <span>Firmware: {{ bridge.esp32().version ? 'v' + bridge.esp32().version : '—' }}</span>
+                <span>Chip: {{ bridge.esp32().chip ?? '—' }}</span>
+                <span>Port: {{ bridge.esp32().path ?? '—' }}</span>
+              </div>
+              @if (bridge.esp32().keys === false) {
+                <p class="mt-2 text-sm text-amber-700 dark:text-amber-300">
+                  The board holds no Switch keys. Open
+                  <button class="underline" (click)="bridge.openExternal('https://switch.gblink.io')">switch.gblink.io</button>
+                  once to install its firmware and drop your prod.keys on the page.
+                </p>
+              }
+            } @else if (bridge.esp32().detail; as detail) {
+              <p class="mt-1 font-mono text-xs text-amber-700 dark:text-amber-300">{{ detail }}</p>
+            }
           </section>
 
           @if (bridge.usbBlocked()) {
@@ -144,10 +168,31 @@ export class DeviceDrawer {
 
   protected stateText(): string {
     const state = this.bridge.deviceState();
-    if (state === 'handshake-received' && this.bridge.peers().length > 0) {
+    if (
+      this.bridge.game() === 'gen3' &&
+      this.bridge.console() === 'gba' &&
+      state === 'handshake-received' &&
+      this.bridge.peers().length > 0
+    ) {
       return 'GBA in the Cable Club — linking with partner…';
     }
-    return deviceStateText(state);
+    return deviceStateText(state, this.bridge.game(), this.bridge.console());
+  }
+
+  protected espStateText(): string {
+    const esp = this.bridge.esp32();
+    switch (esp.state) {
+      case 'present':
+        return esp.keys === false ? 'ESP32 bridge connected — Switch keys missing' : 'ESP32 bridge connected — ready';
+      case 'error':
+        return 'ESP32 board found, but its firmware did not answer';
+      default:
+        return 'No ESP32-S3, C3 or C6 bridge detected. A classic ESP32 on a USB-serial chip is found when a Switch session starts.';
+    }
+  }
+
+  protected selectionText(): string {
+    return cableSelectionText(this.bridge.firmware()?.cableSelection);
   }
   protected fwText(): string {
     return firmwareText(this.bridge.firmware());

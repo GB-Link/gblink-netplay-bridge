@@ -6,6 +6,8 @@ import type { FirmwareVersion } from '../types';
 
 export interface DeviceWatcherEvents {
   presence: [{ present: boolean; firmware?: FirmwareVersion; detail?: string }];
+  /** Per-attempt diagnostics while trying to open a freshly seen adapter. */
+  log: [string];
 }
 
 const isGBLink = (d: Device): boolean =>
@@ -34,8 +36,12 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export class DeviceWatcher extends EventEmitter<DeviceWatcherEvents> {
   private suspended = false;
   private probing = false;
+  /** The probe holding the device right now, if any. */
+  private probeRun: Promise<unknown> | null = null;
   private started = false;
   private slowRetry: ReturnType<typeof setTimeout> | null = null;
+  /** True once a failure has been reported; silences repeat retry logging. */
+  private blockedNotified = false;
 
   private readonly onAttach = (d: Device): void => {
     if (!isGBLink(d)) return;
@@ -47,6 +53,7 @@ export class DeviceWatcher extends EventEmitter<DeviceWatcherEvents> {
   private readonly onDetach = (d: Device): void => {
     if (!isGBLink(d)) return;
     this.clearSlowRetry();
+    this.blockedNotified = false;
     this.emit('presence', { present: false });
   };
 
@@ -67,10 +74,14 @@ export class DeviceWatcher extends EventEmitter<DeviceWatcherEvents> {
     usb.removeListener('detach', this.onDetach);
   }
 
-  /** A running session owns the device; the watcher must not open it. */
-  suspend(): void {
+  /**
+   * Leaves the device to a session; resolves once a running probe has let go. Two handles on
+   * the adapter take each other's replies, and the probe's release breaks the session's transfers.
+   */
+  async suspend(): Promise<void> {
     this.suspended = true;
     this.clearSlowRetry();
+    if (this.probeRun) await this.probeRun.catch(() => undefined);
   }
 
   resume(): void {
@@ -93,6 +104,7 @@ export class DeviceWatcher extends EventEmitter<DeviceWatcherEvents> {
     this.clearSlowRetry();
     try {
       let lastError: Error | null = null;
+      let attempt = 0;
       for (const wait of PROBE_DELAYS_MS) {
         await delay(wait);
         // The device may have been unplugged or claimed mid-wait.
@@ -101,18 +113,32 @@ export class DeviceWatcher extends EventEmitter<DeviceWatcherEvents> {
           this.emit('presence', { present: false });
           return;
         }
+        attempt++;
         try {
-          const info = await this.probe();
+          const run = this.probe();
+          this.probeRun = run;
+          const info = await run.finally(() => {
+            this.probeRun = null;
+          });
+          if (this.blockedNotified) this.emit('log', 'adapter opened after earlier failures');
+          else if (attempt > 1) this.emit('log', `adapter opened on attempt ${attempt}`);
+          this.blockedNotified = false;
           this.emit('presence', { present: true, ...info });
           return;
         } catch (e) {
           lastError = e as Error;
+          // Only the first failing sequence is logged in detail; background
+          // retries stay silent so they cannot flood the event log.
+          if (!this.blockedNotified) {
+            this.emit('log', `adapter open attempt ${attempt} failed: ${lastError.message}`);
+          }
         }
       }
       // Enumerated but not openable (permissions, driver still attaching, or
       // another program holds it). Keep checking quietly in the background so
       // a late driver bind recovers without the user restarting the app.
-      this.emit('presence', { present: true, detail: lastError?.message });
+      this.emit('presence', { present: true, detail: lastError?.message ?? 'unknown error' });
+      this.blockedNotified = true;
       this.scheduleSlowRetry();
     } finally {
       this.probing = false;

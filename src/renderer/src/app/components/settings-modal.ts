@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { BridgeService } from '../services/bridge.service';
 import { UiStateService } from '../services/ui-state.service';
 import type { AppSettings } from '../../../../shared/ipc';
+import type { CableSelection } from '../../../../engine/types';
 import { normalizePort } from '../util/ports';
 
 @Component({
@@ -62,17 +63,26 @@ import { normalizePort } from '../util/ports';
           <label class="mb-3 block text-sm">
             <span class="mb-1 block text-neutral-600 dark:text-neutral-400">Link cable</span>
             <select
-              [(ngModel)]="m.cableOverride"
-              class="w-full rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900"
+              [ngModel]="cableSelection()"
+              (ngModelChange)="applyCableSelection($event)"
+              [disabled]="cableDisabled()"
+              class="w-full rounded border border-neutral-300 bg-transparent px-2 py-1.5 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-900"
             >
               <option value="auto">Automatic (detect)</option>
               <option value="gba">GBA cable</option>
               <option value="gbc">GBC cable</option>
             </select>
             <span class="mt-1 block text-xs text-neutral-500">
-              Set this if automatic detection picks the wrong cable. Takes effect on
-              the next connection.
+              @if (cableDisabled()) {
+                Stored on the adapter — plug it in (and stop any session) to change it.
+              } @else {
+                Stored on the adapter and applied to every mode, the Celio web client
+                included. Set it if automatic detection picks the wrong cable.
+              }
             </span>
+            @if (cableError(); as err) {
+              <span class="mt-1 block text-xs text-red-600 dark:text-red-400">{{ err }}</span>
+            }
           </label>
           <label class="mb-3 block text-sm">
             <span class="mb-1 block text-neutral-600 dark:text-neutral-400">Default relay</span>
@@ -153,6 +163,29 @@ export class SettingsModal {
   protected readonly model = signal<AppSettings | null>(null);
   protected readonly saved = signal<string | null>(null);
   protected readonly confirmingReset = signal(false);
+  protected readonly cableError = signal<string | null>(null);
+  /** Selection as the adapter last reported it; 'auto' until a probe succeeds. */
+  protected cableSelection(): CableSelection {
+    return this.bridge.firmware()?.cableSelection ?? 'auto';
+  }
+
+  protected cableDisabled(): boolean {
+    return (
+      this.bridge.sessionActive() ||
+      this.bridge.deviceState() === 'absent' ||
+      this.bridge.firmware()?.cableSelection === undefined
+    );
+  }
+
+  protected async applyCableSelection(selection: CableSelection): Promise<void> {
+    this.cableError.set(null);
+    try {
+      await this.bridge.setCableSelection(selection);
+      this.flash('Cable selection stored on the adapter');
+    } catch (e) {
+      this.cableError.set(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   readonly closed = output<void>();
 

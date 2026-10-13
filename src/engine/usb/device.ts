@@ -12,6 +12,8 @@ const EP_DATA_IN = 0x82;
 
 const POLL_TRANSFERS = 2;
 const POLL_SIZE = 64;
+/** A handle that broke with the adapter still plugged in is offered back this long after. */
+const REOPEN_AFTER_MS = 1000;
 
 export interface UsbTransportEvents {
   /** Raw status endpoint (0x81) payload: consecutive 2-byte LE words. */
@@ -28,6 +30,8 @@ export interface ILinkTransport extends EventEmitter<UsbTransportEvents> {
   sendCommand(bytes: Buffer | number[]): Promise<void>;
   sendData(buf: Buffer): Promise<void>;
   close(): Promise<void>;
+  /** Whether the device is plugged in, so a failed open is worth retrying. */
+  present?(): boolean;
 }
 
 const hex = (value: number, digits: number): string => value.toString(16).padStart(digits, '0');
@@ -50,13 +54,19 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
 
   /** IN endpoint addresses that already spent their single clearHalt retry. */
   private readonly retried = new Set<number>();
+  /** The owner closed this transport: nothing is offered back any more. */
+  private closed = false;
+  private reopenTimer: NodeJS.Timeout | null = null;
 
   private readonly onAttach = (device: Device): void => {
     if (isGBLink(device)) this.emit('attached');
   };
 
   private readonly onDetach = (device: Device): void => {
-    if (isGBLink(device)) this.emit('detached');
+    if (!isGBLink(device)) return;
+    // The handle is dead with the device; drop it so a later open() works.
+    this.dropHandle();
+    this.emit('detached');
   };
 
   constructor() {
@@ -71,12 +81,17 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
     return getDeviceList().filter(isGBLink);
   }
 
+  present(): boolean {
+    return UsbTransport.list().length > 0;
+  }
+
   static find(): Device | undefined {
     return findByIds(GBLINK_VID, GBLINK_PID);
   }
 
   async open(device?: Device): Promise<void> {
     if (this.device) throw new Error('UsbTransport is already open');
+    this.closed = false;
     const dev = device ?? UsbTransport.find();
     if (!dev) {
       throw new Error(`GBLink device ${hex(GBLINK_VID, 4)}:${hex(GBLINK_PID, 4)} not found`);
@@ -128,6 +143,9 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
   }
 
   async close(): Promise<void> {
+    this.closed = true;
+    if (this.reopenTimer) clearTimeout(this.reopenTimer);
+    this.reopenTimer = null;
     usb.removeListener('attach', this.onAttach);
     usb.removeListener('detach', this.onDetach);
     const { device, iface, statusIn, dataIn } = this;
@@ -137,6 +155,7 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
     this.dataOut = null;
     this.statusIn = null;
     this.dataIn = null;
+    this.retried.clear();
     if (!device) return;
 
     for (const ep of [statusIn, dataIn]) {
@@ -190,10 +209,28 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
     ep.startPoll(POLL_TRANSFERS, POLL_SIZE);
   }
 
+  /** Forget an unplugged device without waiting on transfers that can never finish. */
+  private dropHandle(): void {
+    const { device } = this;
+    this.device = null;
+    this.iface = null;
+    this.cmdOut = null;
+    this.dataOut = null;
+    this.statusIn = null;
+    this.dataIn = null;
+    this.retried.clear();
+    if (!device) return;
+    try {
+      device.close();
+    } catch {
+      // already gone
+    }
+  }
+
   private recoverPoll(ep: InEndpoint): void {
     if (!this.device) return;
     if (this.retried.has(ep.address)) {
-      this.emit('detached');
+      this.lostHandle();
       return;
     }
     this.retried.add(ep.address);
@@ -203,16 +240,31 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
       if (!this.device) return;
       ep.clearHalt((error) => {
         if (error || !this.device) {
-          this.emit('detached');
+          this.lostHandle();
           return;
         }
         try {
           ep.startPoll(POLL_TRANSFERS, POLL_SIZE);
         } catch {
-          this.emit('detached');
+          this.lostHandle();
         }
       });
     });
+  }
+
+  /**
+   * The handle broke without an unplug (transfer errors, another handle letting go): no
+   * hotplug event follows, so 'attached' is emitted once the adapter can be reopened.
+   */
+  private lostHandle(): void {
+    this.dropHandle();
+    this.emit('detached');
+    if (this.reopenTimer) return;
+    this.reopenTimer = setTimeout(() => {
+      this.reopenTimer = null;
+      if (!this.closed && !this.device && this.present()) this.emit('attached');
+    }, REOPEN_AFTER_MS);
+    this.reopenTimer.unref?.();
   }
 
   private requireOut(iface: Interface, address: number): OutEndpoint {

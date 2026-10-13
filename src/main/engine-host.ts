@@ -1,6 +1,17 @@
 import { BrowserWindow } from 'electron';
-import { DeviceWatcher, GBLinkEngine, type SessionPhase as EngineSessionPhase } from '../engine/index';
-import { FwStatus, GPSP_CORE_VERSION, type CloseReason, type NetplayPeer } from '../engine/types';
+import { DeviceWatcher, Esp32Watcher, GBLinkEngine, type SessionPhase as EngineSessionPhase } from '../engine/index';
+import {
+  FwStatus,
+  GPSP_CORE_VERSION,
+  formatAwStats,
+  type CableSelection,
+  type CloseReason,
+  type Console,
+  type FirmwareVersion,
+  type LinkGame,
+  type NetplayPeer,
+} from '../engine/index';
+import { DEFAULT_GAME_NAMES } from '../shared/games';
 import {
   IPC,
   type AppSettings,
@@ -10,6 +21,7 @@ import {
   type JoinDirectRequest,
   type JoinRelayRequest,
   type SessionPhase,
+  type SessionSetup,
 } from '../shared/ipc';
 import { LanResponder } from './lan-discovery';
 import { announce, resolveTunnel } from './lobby';
@@ -53,8 +65,11 @@ export class EngineHost {
   private readonly engine: GBLinkEngine;
   private readonly lanResponder: LanResponder;
   private readonly watcher = new DeviceWatcher();
+  private readonly espWatcher = new Esp32Watcher();
 
   private hostReq: HostRequest | null = null;
+  private activeGame: LinkGame = 'gen3';
+  private activeConsole: Console = 'gba';
   private relayJoin = false;
   private relaySessionId: string | undefined;
   private peers: NetplayPeer[] = [];
@@ -62,6 +77,8 @@ export class EngineHost {
   private localClientId: number | undefined;
   private announceFirstTimer: NodeJS.Timeout | null = null;
   private announceInterval: NodeJS.Timeout | null = null;
+  /** A session is starting: the close of the one it replaces must not wake the watchers. */
+  private starting = false;
 
   constructor(
     private readonly settings: SettingsStore,
@@ -70,28 +87,55 @@ export class EngineHost {
     this.engine = engine;
     this.lanResponder = new LanResponder((msg) => this.log('warn', msg));
     this.wireEngine();
+    this.watcher.on('log', (msg) => this.log('info', msg));
     this.watcher.on('presence', (p) => {
       this.broadcast({
         type: 'device',
         state: p.present ? 'present' : 'absent',
         firmware: p.firmware,
+        blocked: p.present ? p.detail !== undefined : false,
       });
       if (p.detail) this.log('warn', `adapter present but not openable: ${p.detail}`);
     });
     this.engine.on('cable-type', (cableType) => {
       this.broadcast({ type: 'device', cableType });
     });
+    this.espWatcher.on('log', (msg) => this.log('info', msg));
+    this.espWatcher.on('presence', (p) => {
+      this.broadcast({
+        type: 'esp32',
+        state: p.present ? (p.detail ? 'error' : 'present') : 'absent',
+        path: p.path,
+        version: p.info?.version,
+        chip: p.info?.chip,
+        keys: p.keys,
+        detail: p.detail,
+      });
+    });
     this.watcher.start();
+    this.espWatcher.start();
   }
 
   /** Re-broadcasts current device presence (e.g. for a freshly opened window). */
   refreshDevice(): void {
     void this.watcher.check();
+    const p = this.espWatcher.presence;
+    this.broadcast({
+      type: 'esp32',
+      state: p.present ? (p.detail ? 'error' : 'present') : 'absent',
+      path: p.path,
+      version: p.info?.version,
+      chip: p.info?.chip,
+      keys: p.keys,
+      detail: p.detail,
+    });
   }
 
-  private async startSession(start: () => Promise<void>, port?: number): Promise<void> {
-    // The watcher's probe and a session cannot share the claimed interface.
-    this.watcher.suspend();
+  private async startSession(start: () => Promise<void>, port: number, game: LinkGame): Promise<void> {
+    // The watchers' probes and a session cannot share the claimed device.
+    await this.watcher.suspend();
+    await this.espWatcher.suspend();
+    this.starting = true;
     try {
       await start();
     } catch (e) {
@@ -101,35 +145,41 @@ export class EngineHost {
       this.stopAnnounce();
       this.lanResponder.stop();
       this.watcher.resume();
-      const detail = describeStartFailure(e as Error, port);
+      this.espWatcher.resume();
+      const detail = describeStartFailure(e as Error, port, game);
       this.log('error', detail);
       this.broadcastSession('socket-error', detail);
       throw new Error(detail);
+    } finally {
+      this.starting = false;
     }
   }
 
   async joinDirect(req: JoinDirectRequest): Promise<void> {
     this.resetSessionState();
+    const setup = this.rememberSetup(req);
     await this.startSession(() =>
       this.engine.start({
         mode: 'join',
-        cableOverride: this.settings.get().cableOverride,
+        ...setup,
         host: req.host,
         port: req.port,
         nick: req.nick,
         password: req.password,
       }),
       req.port,
+      setup.game,
     );
   }
 
   async joinRelay(req: JoinRelayRequest): Promise<void> {
     this.resetSessionState();
     this.relayJoin = true;
+    const setup = this.rememberSetup(req);
     await this.startSession(() =>
       this.engine.start({
         mode: 'join',
-        cableOverride: this.settings.get().cableOverride,
+        ...setup,
         host: req.addr,
         port: req.port,
         relaySession: req.session,
@@ -137,12 +187,15 @@ export class EngineHost {
         password: req.password,
       }),
       req.port,
+      setup.game,
     );
   }
 
   async host(req: HostRequest): Promise<void> {
     this.resetSessionState();
-    this.hostReq = req;
+    const setup = this.rememberSetup(req);
+    const game = setup.game;
+    this.hostReq = { ...req, gameName: req.gameName.trim() || DEFAULT_GAME_NAMES[game] };
     let relay: { addr: string; port: number } | undefined;
     if (req.relay) {
       if (req.relay.handle === 'custom') {
@@ -157,7 +210,7 @@ export class EngineHost {
     await this.startSession(() =>
       this.engine.start({
         mode: 'host',
-        cableOverride: this.settings.get().cableOverride,
+        ...setup,
         port: req.port,
         nick: req.nick,
         password: req.password,
@@ -166,6 +219,7 @@ export class EngineHost {
         contentCrc: req.gameCrc ? parseInt(req.gameCrc, 16) : undefined,
       }),
       req.port,
+      game,
     );
     if (!req.announce) this.broadcast({ type: 'announce', status: 'off' });
   }
@@ -176,6 +230,42 @@ export class EngineHost {
     this.hostReq = null;
     await this.engine.stop();
     this.watcher.resume();
+    this.espWatcher.resume();
+  }
+
+  /** Resolve the request's device and play options (fallback: last used) and persist them. */
+  private rememberSetup(requested: SessionSetup): {
+    game: LinkGame;
+    console: Console;
+    switchRoom: AppSettings['switchRoom'];
+    nationalBypass: boolean;
+    espPort: string | undefined;
+  } {
+    const current = this.settings.get();
+    const game = requested.game ?? current.game;
+    const console = requested.console ?? current.console;
+    const switchRoom = requested.switchRoom ?? current.switchRoom;
+    const nationalBypass = requested.nationalBypass ?? current.nationalBypass;
+    this.activeGame = game;
+    this.activeConsole = console;
+    const patch: Partial<AppSettings> = {};
+    if (current.game !== game) patch.game = game;
+    if (current.console !== console) patch.console = console;
+    if (current.switchRoom !== switchRoom) patch.switchRoom = switchRoom;
+    if (current.nationalBypass !== nationalBypass) patch.nationalBypass = nationalBypass;
+    if (Object.keys(patch).length > 0) this.settings.update(patch);
+    return { game, console, switchRoom, nationalBypass, espPort: this.espWatcher.presence.path };
+  }
+
+  /** Persist the link-cable selection on the adapter; idle only. */
+  async setCableSelection(selection: CableSelection): Promise<FirmwareVersion> {
+    // The watcher's probe and the selection write cannot share the interface.
+    await this.watcher.suspend();
+    try {
+      return await this.engine.setCableSelection(selection);
+    } finally {
+      if (!this.engine.isRunning) this.watcher.resume();
+    }
   }
 
   private wireEngine(): void {
@@ -185,9 +275,16 @@ export class EngineHost {
       if (d.detail) this.log('warn', d.detail);
     });
     this.engine.on('fw-status', (status) => {
+      // A Switch session's statuses come from the ESP32 side, not the GB-Link.
+      if (this.activeConsole !== 'gba') return;
       const state = FW_DEVICE_STATE[status];
       if (state) this.broadcast({ type: 'device', state, raw: status });
     });
+    this.engine.on('esp32', (d) => {
+      this.broadcast({ type: 'esp32', state: d.state, version: d.info?.version, detail: d.detail });
+      if (d.detail) this.log('warn', d.detail);
+    });
+    this.engine.on('room', (host) => this.broadcast({ type: 'room', host }));
     this.engine.on('link-phase', (phase, raw) => {
       this.broadcast({ type: 'link', phase, raw });
     });
@@ -199,7 +296,12 @@ export class EngineHost {
         this.lanResponder.stop();
         this.relayJoin = false;
         this.peers = [];
-        this.watcher.resume();
+        // The engine keeps the adapter and the board's port until the session is stopped,
+        // and a new session's start closes the old one before it opens the adapter again.
+        if (!this.engine.isRunning && !this.starting) {
+          this.watcher.resume();
+          this.espWatcher.resume();
+        }
       }
       this.broadcastSession(s.closeReason, s.detail);
     });
@@ -208,8 +310,10 @@ export class EngineHost {
       this.broadcastSession();
     });
     this.engine.on('counters', (c) => {
-      this.broadcast({ type: 'counters', txPackets: c.txPackets, rxPackets: c.rxPackets });
+      this.broadcast({ type: 'counters', ...c });
     });
+    this.engine.on('warn', (msg) => this.log('warn', msg));
+    this.engine.on('aw-stats', (s) => this.log('debug', formatAwStats(s)));
     this.engine.on('host-ready', (info) => this.onHostReady(info));
     this.engine.on('log', (msg) => this.log('info', msg));
     this.engine.on('error', (e) => this.log('error', e.message));
@@ -323,6 +427,8 @@ export class EngineHost {
     this.broadcast({
       type: 'session',
       phase: this.sessionPhase,
+      game: this.activeGame,
+      console: this.activeConsole,
       localClientId: this.localClientId,
       peers: this.peers.map((p) => ({ id: p.id, nick: p.nick })),
       closeReason,
@@ -342,7 +448,7 @@ export class EngineHost {
 }
 
 /** Turn socket/bind failures into something a player can act on. */
-function describeStartFailure(e: Error, port?: number): string {
+function describeStartFailure(e: Error, port: number | undefined, game: LinkGame): string {
   const code = (e as NodeJS.ErrnoException).code;
   const where = port === undefined ? 'that port' : `port ${port}`;
   switch (code) {
@@ -356,7 +462,10 @@ function describeStartFailure(e: Error, port?: number): string {
     case 'EAI_AGAIN':
       return 'That address could not be found — check it for typos.';
     case 'ETIMEDOUT':
-      return 'The connection timed out — check the address and port, or ask the host to use a relay.';
+      // Wireless Adapter games can't use a relay.
+      return game === 'rfu'
+        ? "The connection timed out — check the address and port, and that the host's port is open."
+        : 'The connection timed out — check the address and port, or ask the host to use a relay.';
     case 'ECONNRESET':
       return 'The host closed the connection unexpectedly.';
     default:

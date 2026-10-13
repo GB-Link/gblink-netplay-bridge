@@ -1,12 +1,24 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { BridgeService } from '../services/bridge.service';
 import { UiStateService } from '../services/ui-state.service';
 import type { AppSettings, RelayHandle } from '../../../../shared/ipc';
+import type { Console, LinkGame, SwitchRoom } from '../../../../engine/types';
+import {
+  CONSOLE_GAMES,
+  CONSOLE_LABELS,
+  DEFAULT_GAME_NAMES,
+  GAME_LABELS,
+  GPSP_SERIAL_OPTION,
+  SWITCH_ROOM_LABELS,
+  isConsole,
+  isLinkGame,
+  isSwitchRoom,
+} from '../../../../shared/games';
 import { DEFAULT_NETPLAY_PORT, normalizePort } from '../util/ports';
 
-/** Shown to other players when the game name field is left blank. */
-const DEFAULT_GAME_NAME = 'Pokemon Ruby';
+const CONSOLE_CHOICES: Console[] = ['gba', 'switch'];
+const ROOM_CHOICES: SwitchRoom[] = ['trade', 'single', 'double'];
 
 type RelayChoice = RelayHandle | 'off';
 
@@ -26,6 +38,73 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
     <section
       class="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
     >
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <span class="text-sm text-neutral-600 dark:text-neutral-400">Console</span>
+        <div
+          class="inline-flex overflow-hidden rounded border border-neutral-300 text-sm dark:border-neutral-700"
+        >
+          @for (c of consoleChoices; track c) {
+            <button
+              (click)="ui.setConsole(c)"
+              class="px-3 py-1.5 first:border-0 border-l border-neutral-300 dark:border-neutral-700"
+              [class.bg-neutral-200]="ui.console() === c"
+              [class.font-semibold]="ui.console() === c"
+              [class.dark:bg-neutral-700]="ui.console() === c"
+              [class.text-neutral-500]="ui.console() !== c"
+            >{{ consoleLabels[c] }}</button>
+          }
+        </div>
+      </div>
+
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <span class="text-sm text-neutral-600 dark:text-neutral-400">Game</span>
+        <div
+          class="inline-flex overflow-hidden rounded border border-neutral-300 text-sm dark:border-neutral-700"
+        >
+          @for (g of gameChoices(); track g) {
+            <button
+              (click)="selectGame(g)"
+              class="px-3 py-1.5 first:border-0 border-l border-neutral-300 dark:border-neutral-700"
+              [class.bg-neutral-200]="ui.game() === g"
+              [class.font-semibold]="ui.game() === g"
+              [class.dark:bg-neutral-700]="ui.game() === g"
+              [class.text-neutral-500]="ui.game() !== g"
+            >{{ gameLabels[g] }}</button>
+          }
+        </div>
+      </div>
+
+      <p class="mb-3 text-xs text-neutral-500">
+        RetroArch players set gpsp's <span class="font-medium">Link Cable Connectivity</span> to
+        <span class="font-medium">{{ gpspOption() }}</span> before loading the game.
+      </p>
+
+      @if (ui.console() === 'switch') {
+        <div class="mb-3 flex flex-wrap items-center gap-4">
+          @if (ui.game() === 'gen3' && ui.playMode() === 'join') {
+            <label class="flex items-center gap-2 text-sm">
+              <span class="text-neutral-600 dark:text-neutral-400">Switch joins</span>
+              <select
+                [ngModel]="ui.switchRoom()"
+                (ngModelChange)="ui.setSwitchRoom($event)"
+                class="rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900"
+              >
+                @for (r of roomChoices; track r) {
+                  <option [ngValue]="r">{{ roomLabels[r] }}</option>
+                }
+              </select>
+            </label>
+          }
+          <label
+            class="flex items-center gap-2 text-sm"
+            title="Lets the Switch link with Emerald (or Ruby and Sapphire by cable) before the Sevii Islands story and the National Dex. Leave it off when the other players run FireRed or LeafGreen: they would see the Switch as an Emerald and check their own progress."
+          >
+            <input type="checkbox" [ngModel]="ui.nationalBypass()" (ngModelChange)="ui.setNationalBypass($event)" class="h-4 w-4" />
+            <span>National Dex bypass (partner on Emerald, Ruby or Sapphire)</span>
+          </label>
+        </div>
+      }
+
       <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div
           class="inline-flex overflow-hidden rounded border border-neutral-300 text-sm dark:border-neutral-700"
@@ -122,11 +201,20 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
         }
 
         @if (relaySession.trim()) {
-          <div
-            class="mb-3 rounded bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:bg-sky-950 dark:text-sky-300"
-          >
-            Relay session set — will join through the relay.
-          </div>
+          @if (wireless()) {
+            <div
+              class="mb-3 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+            >
+              Wireless Adapter games can't join through a relay. Ask the host to turn their relay off,
+              then empty the session field and connect to their address.
+            </div>
+          } @else {
+            <div
+              class="mb-3 rounded bg-sky-50 px-2 py-1 text-xs text-sky-700 dark:bg-sky-950 dark:text-sky-300"
+            >
+              Relay session set — will join through the relay.
+            </div>
+          }
         }
 
         <button
@@ -165,15 +253,23 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
         <label class="mb-3 block text-sm">
           <span class="mb-1 block text-neutral-600 dark:text-neutral-400">Relay</span>
           <select
-            [(ngModel)]="relay"
-            class="w-full rounded border border-neutral-300 bg-transparent px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900"
+            [ngModel]="hostRelay()"
+            (ngModelChange)="relay = $event"
+            [disabled]="wireless()"
+            class="w-full rounded border border-neutral-300 bg-transparent px-2 py-1.5 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-900"
           >
             @for (c of relayChoices; track c.value) {
               <option [ngValue]="c.value">{{ c.label }}</option>
             }
           </select>
+          @if (wireless()) {
+            <span class="mt-1 block text-xs text-neutral-500">
+              Wireless Adapter games host without a relay, which adds more delay than they can take.
+              Players on your network can join you directly; anyone else needs your port forwarded.
+            </span>
+          }
         </label>
-        @if (relay === 'custom') {
+        @if (hostRelay() === 'custom') {
           <label class="mb-3 block text-sm">
             <span class="mb-1 block text-neutral-600 dark:text-neutral-400">Custom relay address</span>
             <input
@@ -212,7 +308,7 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
         }
         <button
           (click)="startHosting()"
-          [disabled]="bridge.sessionActive() || !crcValid() || (relay === 'custom' && !customAddr.trim())"
+          [disabled]="bridge.sessionActive() || !crcValid() || (hostRelay() === 'custom' && !customAddr.trim())"
           class="w-full rounded bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
         >Start hosting</button>
       }
@@ -223,6 +319,15 @@ export class PlayCard {
   protected readonly bridge = inject(BridgeService);
   protected readonly ui = inject(UiStateService);
   protected readonly relayChoices = RELAY_CHOICES;
+  protected readonly consoleChoices = CONSOLE_CHOICES;
+  protected readonly consoleLabels = CONSOLE_LABELS;
+  protected readonly roomChoices = ROOM_CHOICES;
+  protected readonly roomLabels = SWITCH_ROOM_LABELS;
+  protected readonly gameLabels = GAME_LABELS;
+  protected readonly gameChoices = computed(() => CONSOLE_GAMES[this.ui.console()]);
+  protected readonly gpspOption = computed(() => GPSP_SERIAL_OPTION[this.ui.game()]);
+  /** A relay's delay is more than the Wireless Adapter games can take, on either console. */
+  protected readonly wireless = computed(() => this.ui.game() === 'rfu');
 
   // Join form.
   protected readonly normalizePort = normalizePort;
@@ -255,12 +360,28 @@ export class PlayCard {
       this.relayPort = this.defaultPort;
       this.hostPort = normalizePort(s.hostPort, this.defaultPort);
       if (!this.address) this.address = s.lastAddress;
+      if (!this.ui.gameSeeded() && isLinkGame(s.game)) {
+        this.ui.game.set(s.game);
+        this.ui.gameSeeded.set(true);
+        if (isConsole(s.console)) this.ui.console.set(s.console);
+        if (isSwitchRoom(s.switchRoom)) this.ui.switchRoom.set(s.switchRoom);
+        this.ui.nationalBypass.set(Boolean(s.nationalBypass));
+      }
       if (!this.gameName) this.gameName = s.gameName;
       if (!this.gameCrc) this.gameCrc = s.gameCrc;
       this.relay = s.relayDefault;
       this.announce = s.announce;
       this.settingsLoaded = true;
     });
+  }
+
+  protected selectGame(game: LinkGame): void {
+    this.ui.setGame(game);
+    // Follow the announce-name default unless the host typed a custom one.
+    const defaults = Object.values(DEFAULT_GAME_NAMES) as string[];
+    if (this.gameName.trim() === '' || defaults.includes(this.gameName.trim())) {
+      this.gameName = DEFAULT_GAME_NAMES[game];
+    }
   }
 
   protected onAddressChange(value: string): void {
@@ -280,7 +401,7 @@ export class PlayCard {
 
   protected connectDisabled(): boolean {
     if (this.bridge.sessionActive()) return true;
-    if (this.relaySession.trim()) return !(this.relayAddr.trim() || this.address.trim());
+    if (this.relaySession.trim()) return this.wireless() || !(this.relayAddr.trim() || this.address.trim());
     return !this.address.trim();
   }
 
@@ -299,6 +420,15 @@ export class PlayCard {
     void this.bridge.setSettings(patch);
   }
 
+  private setup(): { game: LinkGame; console: Console; switchRoom: SwitchRoom; nationalBypass: boolean } {
+    return {
+      game: this.ui.game(),
+      console: this.ui.console(),
+      switchRoom: this.ui.switchRoom(),
+      nationalBypass: this.ui.nationalBypass(),
+    };
+  }
+
   private async tryConnect(): Promise<void> {
     this.remember({ lastAddress: this.address.trim() });
     const nick = this.ui.effectiveNick();
@@ -311,6 +441,7 @@ export class PlayCard {
         session,
         nick,
         password,
+        ...this.setup(),
       });
       return;
     }
@@ -321,7 +452,18 @@ export class PlayCard {
       host = m[1];
       port = normalizePort(m[2], this.defaultPort);
     }
-    await this.bridge.joinDirect({ host, port: normalizePort(port, this.defaultPort), nick, password });
+    await this.bridge.joinDirect({
+      host,
+      port: normalizePort(port, this.defaultPort),
+      nick,
+      password,
+      ...this.setup(),
+    });
+  }
+
+  /** Wireless Adapter games host without a relay; the saved choice still applies to the others. */
+  protected hostRelay(): RelayChoice {
+    return this.wireless() ? 'off' : this.relay;
   }
 
   protected crcValid(): boolean {
@@ -340,7 +482,8 @@ export class PlayCard {
   private async hostSession(): Promise<void> {
     const port = normalizePort(this.hostPort, this.defaultPort);
     this.hostPort = port;
-    const gameName = this.gameName.trim() || DEFAULT_GAME_NAME;
+    const gameName = this.gameName.trim() || DEFAULT_GAME_NAMES[this.ui.game()];
+    const relay = this.hostRelay();
     this.remember({
       hostPort: port,
       announce: this.announce,
@@ -355,14 +498,15 @@ export class PlayCard {
       spectatePassword: this.spectatePassword || undefined,
       announce: this.announce,
       relay:
-        this.relay === 'off'
+        relay === 'off'
           ? undefined
           : {
-              handle: this.relay,
-              customAddr: this.relay === 'custom' ? this.customAddr.trim() : undefined,
+              handle: relay,
+              customAddr: relay === 'custom' ? this.customAddr.trim() : undefined,
             },
       gameName,
       gameCrc: this.gameCrc || undefined,
+      ...this.setup(),
     });
   }
 }

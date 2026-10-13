@@ -2,15 +2,17 @@ import { EventEmitter } from 'node:events';
 import {
   FwStatus,
   Mpk1State,
+  firmwareLabel,
+  fwAtLeast,
   type AdapterRole,
   type IGBLinkAdapter,
   type INetplayEndpoint,
   type LinkPhase,
-  type CableOverride,
   type PumpTimings,
   type Round,
 } from '../types';
 import { buildMpk1, parseMpk1 } from '../mpk1';
+import { identifyPacket, mismatchWarning } from '../netplay/protocolMagic';
 import { PacedEmitter, RoundBatcher } from './pumps';
 
 export type BridgeMode = 'join' | 'host';
@@ -19,11 +21,13 @@ export type BridgeMode = 'join' | 'host';
 const PEER_STALE_MS = 4000;
 const GRACEFUL_CLOSE_TICK_MS = 100;
 const GRACEFUL_CLOSE_MAX_MS = 3000;
-const REINIT_DELAY_MS = 750;
+export const REINIT_DELAY_MS = 750;
 /** LinkClosed arriving this soon after our own Cancel is our own doing. */
-const SELF_CLOSE_GRACE_MS = 2000;
+export const SELF_CLOSE_GRACE_MS = 2000;
 /** Consecutive failed link-mode starts before we stop retrying. */
-const MAX_REINIT_ATTEMPTS = 5;
+export const MAX_REINIT_ATTEMPTS = 5;
+/** Firmware with the persistent cable selection (0x4b) the bridge relies on. */
+const GEN3_MIN_FW = { major: 2, minor: 2, patch: 3 };
 /**
  * Minimum time between arming the adapter handshake and driving 0x8FFF.
  * The real child GBA needs actual B9A0 exchange rounds (~16 ms each) before
@@ -49,6 +53,7 @@ export interface LinkBridgeEvents {
   /** Cable type sampled by the firmware at mode entry (0 GBA, 1 GBC/none). */
   cable: [number];
   log: [string];
+  warn: [string];
   error: [Error];
 }
 
@@ -83,6 +88,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
   private txPackets = 0;
   private rxPackets = 0;
   private droppedWhileClosed = 0;
+  private mismatchWarned = false;
   /**
    * Peer data received after its re-handshake but before our write gate
    * opens. The remote relay can go live before ours, and some of these
@@ -114,7 +120,6 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     private readonly net: INetplayEndpoint,
     private readonly mode: BridgeMode,
     private readonly timings?: PumpTimings,
-    private readonly cableOverride: CableOverride = 'auto',
   ) {
     super();
     this.emitter = new PacedEmitter((state, words) => this.sendMpk1(state, words), timings);
@@ -157,7 +162,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    if (this.relayActive) await this.gracefulClose();
+    if (this.relayActive && !this.adapter.emulated) await this.gracefulClose();
     this.teardownPumps();
     this.emitter.dispose();
     this.batcher.dispose();
@@ -200,15 +205,18 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     this.selfCancelAt = Date.now();
     try {
       const fw = await this.adapter.getFirmwareInfo();
-      if (fw.major < 2 || (fw.major === 2 && fw.minor < 2)) {
-        throw new Error(`GB-Link firmware ${fw.major}.${fw.minor}.${fw.patch} is too old — 2.2.x or newer required`);
+      if (fw.device === 'esp32') {
+        if (fw.major || fw.minor || fw.patch) this.emit('log', `ESP32 bridge firmware ${firmwareLabel(fw)}`);
+      } else {
+        if (!fwAtLeast(fw, GEN3_MIN_FW.major, GEN3_MIN_FW.minor, GEN3_MIN_FW.patch)) {
+          throw new Error(
+            `GB-Link firmware ${firmwareLabel(fw)} is too old — Pokémon link needs 2.2.3 or newer (update the adapter from the GBLink launcher)`,
+          );
+        }
+        this.emit('log', `firmware ${firmwareLabel(fw)}`);
       }
-      this.emit('log', `firmware ${fw.major}.${fw.minor}.${fw.patch}`);
-      // The firmware samples the cable at mode entry, so the override has to
-      // be in place before SetMode or it applies only to the next session.
-      await this.adapter.setCableOverride(this.cableOverride);
-      if (this.cableOverride !== 'auto') {
-        this.emit('log', `cable detection overridden: ${this.cableOverride.toUpperCase()} cable`);
+      if (fw.cableSelection && fw.cableSelection !== 'auto') {
+        this.emit('log', `link cable pinned on the adapter: ${fw.cableSelection.toUpperCase()}`);
       }
       await this.adapter.initLinkMode(this.role);
       const cable = await this.adapter.getCableType().catch(() => -1);
@@ -233,7 +241,14 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
 
   private onPacket = (buf: Buffer, src: number) => {
     const pkt = parseMpk1(buf);
-    if (!pkt) return;
+    if (!pkt) {
+      const seen = identifyPacket(buf);
+      if (seen && seen !== 'mpk1' && !this.mismatchWarned) {
+        this.mismatchWarned = true;
+        this.emit('warn', mismatchWarning('gen3', seen));
+      }
+      return;
+    }
     this.rxPackets++;
     const prev = this.peers.get(src)?.state;
     if (prev !== pkt.state) {
@@ -272,6 +287,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
   // ---- firmware side ----
 
   private onFwStatus = (status: FwStatus) => {
+    if (this.stopped) return;
     this.emit('log', `fw status 0x${status.toString(16)}`);
     switch (status) {
       case FwStatus.HandshakeReceived:
@@ -314,6 +330,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
   };
 
   private onFwRound = (round: Round) => {
+    if (this.stopped) return;
     this.emitter.pushRounds([round]);
     // The firmware's final data flush and its LinkReconnecting status arrive
     // on different USB endpoints, so the status can be processed first.
@@ -329,12 +346,15 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     this.resetSection();
     this.emitter.disable();
     this.setPhase('idle');
-    this.emit('log', 'GB-Link unplugged — waiting for it to return');
+    this.emit(
+      'log',
+      this.adapter.emulated ? 'the ESP32 bridge is away (restarting or unplugged) — waiting for it' : 'GB-Link unplugged — waiting for it to return',
+    );
   };
 
   private onAttached = () => {
     if (this.stopped) return;
-    this.emit('log', 'GB-Link reattached');
+    this.emit('log', this.adapter.emulated ? 'the ESP32 bridge is back' : 'GB-Link reattached');
     void this.adapter
       .start()
       .then(() => this.initFirmware())
@@ -547,6 +567,10 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
    */
   private async gracefulClose(): Promise<void> {
     if (this.closing) return;
+    if (this.adapter.emulated) {
+      await this.restartSection('the link ended on the netplay side');
+      return;
+    }
     this.closing = true;
     this.writeGate = false;
     this.batcher.clear();
@@ -554,24 +578,45 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     this.emitter.clear();
     this.setPhase('closing');
     const deadline = Date.now() + GRACEFUL_CLOSE_MAX_MS;
+    let timedOut = false;
     try {
       while (Date.now() < deadline && this.relayActive && !this.stopped) {
         await this.adapter.writeRounds(CLOSE_ROUND_BUF).catch(() => undefined);
         await delay(GRACEFUL_CLOSE_TICK_MS);
       }
-      if (this.relayActive) {
-        // Timed out without the firmware acknowledging: force the mode down.
-        this.selfCancelAt = Date.now();
-        await this.adapter.cancel().catch(() => undefined);
-        this.resetSection();
-      }
+      timedOut = this.relayActive;
     } finally {
       this.closing = false;
-      // A 0xFF06 during the loop already reset the section, and a fresh
-      // 0xFF03 may have started the next one. Section state is owned by
-      // onFwStatus; re-evaluating here lets a live new section re-arm.
-      this.evaluate();
     }
+    if (timedOut && !this.stopped) {
+      // The game never answered the close: force the mode down and enter it
+      // again, or the bridge would sit without a link mode.
+      await this.restartSection('the GBA did not answer the link close');
+      return;
+    }
+    // A 0xFF06 during the loop already reset the section, and a fresh
+    // 0xFF03 may have started the next one. Section state is owned by
+    // onFwStatus; re-evaluating here lets a live new section re-arm.
+    this.evaluate();
+  }
+
+  /** Cancel the mode (our own LinkClosed is ignored) and enter it again shortly after. */
+  private async restartSection(reason: string): Promise<void> {
+    if (this.closing || this.stopped) return;
+    this.closing = true;
+    this.emit('log', `restarting the link section: ${reason}`);
+    this.selfCancelAt = Date.now();
+    this.resetSection();
+    this.emitter.disable();
+    this.localState = Mpk1State.Preinit;
+    this.setPhase('closing');
+    try {
+      await this.adapter.cancel().catch(() => undefined);
+    } finally {
+      this.closing = false;
+    }
+    if (this.stopped) return;
+    setTimeout(() => void this.initFirmware(), REINIT_DELAY_MS).unref?.();
   }
 
   private setPhase(phase: LinkPhase, raw?: number): void {

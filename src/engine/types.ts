@@ -20,30 +20,122 @@ export enum FwStatus {
  */
 export type AdapterRole = 'master' | 'slave';
 
-/** Manual cable selection; 'auto' leaves the firmware's own detection alone. */
-export type CableOverride = 'auto' | 'gba' | 'gbc';
+/** Link protocol: Pokémon gen 3 by cable (gpsp MPK1), the Wireless Adapter (RFU1), Advance Wars 1/2 (MAW1). */
+export type LinkGame = 'gen3' | 'rfu' | 'aw1' | 'aw2';
 
-/** Wire values for the firmware's SetCableOverride (0x49) command. */
-export const CABLE_OVERRIDE_VALUE: Record<CableOverride, number> = {
+/** A real GBA on a GB-Link, or a Switch behind an ESP32 bridge. */
+export type Console = 'gba' | 'switch';
+
+/** The group a bridge leads for the Switch when it joins a cable session as the child. */
+export type SwitchRoom = 'trade' | 'single' | 'double';
+
+/** Stored on the adapter (firmware 2.2.3+) as every mode's SD-pin default; 'auto' leaves detection alone. */
+export type CableSelection = 'auto' | 'gba' | 'gbc';
+
+/** Wire values of the firmware's SetCableSelection (0x4b) / GetFirmwareInfo byte 5. */
+export const CABLE_SELECTION_VALUE: Record<CableSelection, number> = {
   auto: 0,
   gba: 1,
   gbc: 2,
 };
 
+export function cableSelectionFromValue(value: number): CableSelection | undefined {
+  for (const [name, v] of Object.entries(CABLE_SELECTION_VALUE)) {
+    if (v === value) return name as CableSelection;
+  }
+  return undefined;
+}
+
 export interface FirmwareVersion {
   major: number;
   minor: number;
   patch: number;
+  /** A GB-Link when absent. */
+  device?: 'gblink' | 'esp32';
+  /** GetFirmwareInfo byte 4 (firmware 2.2.1+). */
+  landingPage?: boolean;
+  /** GetFirmwareInfo byte 5 (firmware 2.2.3+). */
+  cableSelection?: CableSelection;
+}
+
+export function fwAtLeast(fw: FirmwareVersion, major: number, minor: number, patch: number): boolean {
+  if (fw.major !== major) return fw.major > major;
+  if (fw.minor !== minor) return fw.minor > minor;
+  return fw.patch >= patch;
+}
+
+export function firmwareLabel(fw: FirmwareVersion): string {
+  return `${fw.major}.${fw.minor}.${fw.patch}`;
+}
+
+export function parseFirmwareVersion(text: string, device?: 'gblink' | 'esp32'): FirmwareVersion | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(text.trim());
+  if (!m) return null;
+  const fw: FirmwareVersion = { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
+  if (device) fw.device = device;
+  return fw;
+}
+
+/**
+ * Advance Wars master-mode round period in µs (SetMode bytes 3-6). Firmware up to 2.2.7
+ * ignores it; only a build with the proxy's tuning support honours it.
+ */
+export interface AwTimingOverride {
+  pxgUs?: number;
+  syncUs?: number;
 }
 
 /** One 8-word GBA MULTI command round (u16 values, index 0 = LINKCMD word). */
 export type Round = Uint16Array;
+
+/** Counters reported by the firmware's GetAwStats (0x14) reply, format v1. */
+export interface AwStats {
+  rounds: number;
+  txFrames: number;
+  txSuppressed: number;
+  txDropOversize: number;
+  txDropRingFull: number;
+  rxFrames: number;
+  rxDropQueueFull: number;
+  fallbackEcho: number;
+  resets: number;
+  txChunkRetries: number;
+  usbDataStalls: number;
+  maxRoundGapMs: number;
+  rqHighWater: number;
+  rqCount: number;
+  state: number;
+  pstate: number;
+  remoteState: number;
+  /** 1 = attached GBA is the bus master (adapter in SLAVE link mode). */
+  role: number;
+  variant: number;
+  pxgPeriodUs: number;
+  syncPeriodUs: number;
+}
+
+export interface BridgeCounters {
+  txPackets: number;
+  rxPackets: number;
+  txBytes?: number;
+  rxBytes?: number;
+  dedupSuppressed?: number;
+  rejected?: number;
+  ignoredPeer?: number;
+}
 
 export interface AdapterEvents {
   /** Firmware status word from the status endpoint. */
   status: [FwStatus];
   /** One 8-word round received from the real GBA (64 B data IN split in 4). */
   round: [Round];
+  /** One 64-byte chunk of the firmware's MAW1 byte stream (Advance Wars mode). */
+  'aw-chunk': [Buffer];
+  /** One 64-byte chunk of the firmware's RFU1 byte stream (wireless adapter mode). */
+  'rfu-chunk': [Buffer];
+  log: [string];
+  /** A condition the player can act on (raised by the Switch's stand-in adapter). */
+  warn: [string];
   /** Non-64-byte data-endpoint payloads (firmware info, cable type replies). */
   'data-raw': [Buffer];
   attached: [];
@@ -52,22 +144,35 @@ export interface AdapterEvents {
 }
 
 export interface IGBLinkAdapter extends EventEmitter<AdapterEvents> {
+  /**
+   * A firmware stand-in with no GBA behind it (the Switch's translators): a link section
+   * is restarted, never closed by playing READY_CLOSE_LINK at a game.
+   */
+  readonly emulated?: boolean;
   /** Find the device, claim interface 0, start the IN transfer loops. */
   start(): Promise<void>;
-  /** Cancel -> 500 ms -> SetMode(gbaLink) -> DeviceReady -> AwaitMode -> role. */
-  initLinkMode(role: AdapterRole): Promise<void>;
+  /** Cancel -> 500 ms -> SetMode(game) -> DeviceReady -> AwaitMode -> role (none for wireless). */
+  initLinkMode(role: AdapterRole, game?: LinkGame, awTiming?: AwTimingOverride): Promise<void>;
   /** 0x12 — only legal after HandshakeReceived (0xFF03) for the live section. */
   startHandshake(): Promise<void>;
-  /** 0x13 — master role only; makes the adapter transmit 0x8FFF. */
+  /** 0x13 — gen3 master role only; makes the adapter transmit 0x8FFF. */
   connectLink(): Promise<void>;
   /** 0x01 — abort the running mode. */
   cancel(): Promise<void>;
-  /** 0x49 — pin-path override; must precede mode entry to take effect. */
-  setCableOverride(mode: CableOverride): Promise<void>;
+  /** 0x4b — persist the link-cable selection on the adapter and apply it now. */
+  setCableSelection(selection: CableSelection): Promise<void>;
   /** Write exactly 64 bytes (4 rounds x 8 u16 LE) to the data OUT endpoint. */
   writeRounds(buf: Buffer): Promise<void>;
+  /** Write exactly 64 bytes of MAW1 stream to the data OUT endpoint. */
+  writeAwChunk(buf: Buffer): Promise<void>;
+  /** Write exactly 64 bytes of RFU1 stream to the data OUT endpoint. */
+  writeRfuChunk(buf: Buffer): Promise<void>;
+  /** 0x4C answered: the firmware carries the wireless adapter mode. */
+  probeWireless(): Promise<boolean>;
   getFirmwareInfo(): Promise<FirmwareVersion>;
   getCableType(): Promise<number>;
+  /** 0x14 — Advance Wars proxy counters (only firmware built with them answers). */
+  getAwStats(): Promise<AwStats>;
   stop(): Promise<void>;
 }
 
@@ -117,12 +222,17 @@ export interface NetplayEvents {
   error: [Error];
 }
 
+/** NETPACKET recipient meaning every playing client (RetroArch's broadcast id). */
+export const NETPACKET_BROADCAST = 0xffff;
+
 export interface INetplayEndpoint extends EventEmitter<NetplayEvents> {
-  /** Broadcast a core packet to every playing peer (reliable, ordered). */
-  sendPacket(buf: Buffer): void;
+  /** Send a core packet (reliable, ordered) to every playing peer or to client `dest`; hosts relay between clients. */
+  sendPacket(buf: Buffer, dest?: number): void;
   close(graceful?: boolean): void;
   readonly localClientId: number | null;
   readonly playingPeers: ReadonlyMap<number, NetplayPeer>;
+  /** Median recent ping round trip to a client; undefined until one completes. */
+  peerRttMs?(id: number): number | undefined;
 }
 
 /** gpsp's library_version (GPSP_VERSION): what RetroArch announces publicly. */
@@ -153,6 +263,11 @@ export interface NetplayJoinOptions extends NetplayIdentity {
   password?: string;
   /** base64 of the 12-byte lobby mitm_session — sends the RATS prelude. */
   relaySession?: string;
+  /**
+   * Refuse any other client number from the host's SYNC. The cable protocols
+   * map it onto the GBA MULTI id, so they need 1; the wireless relay takes any.
+   */
+  expectClientId?: number;
 }
 
 export interface NetplayHostOptions extends NetplayIdentity {
@@ -180,7 +295,10 @@ export const DEFAULT_PUMP_TIMINGS: Required<PumpTimings> = {
   batchFlushMs: 66,
 };
 
-/** User-facing link phase derived by the LinkBridge. */
+/**
+ * User-facing link phase derived by the bridges, in groups: gen3 LinkBridge, AwLinkBridge,
+ * then RfuLinkBridge (which also uses searching/handshake/connected).
+ */
 export type LinkPhase =
   | 'idle'
   | 'searching'
@@ -188,4 +306,9 @@ export type LinkPhase =
   | 'handshake'
   | 'connected'
   | 'closing'
-  | 'closed';
+  | 'closed'
+  | 'init'
+  | 'starting'
+  | 'linked'
+  | 'partner-quiet'
+  | 'room-open';

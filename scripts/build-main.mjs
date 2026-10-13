@@ -20,7 +20,7 @@ await Promise.all([
     ...common,
     entryPoints: [path.join(root, 'src/main/index.ts')],
     outfile: path.join(root, 'dist/main/index.cjs'),
-    external: ['electron', 'usb'],
+    external: ['electron', 'usb', 'serialport'],
   }),
   build({
     ...common,

@@ -7,7 +7,7 @@ import type {
   NetplayJoinOptions,
   NetplayPeer,
 } from '../types';
-import { GPSP_NETPACKET_VERSION } from '../types';
+import { GPSP_NETPACKET_VERSION, NETPACKET_BROADCAST } from '../types';
 import {
   BANNED_MAGIC,
   FULL_MAGIC,
@@ -35,8 +35,10 @@ import {
 import { WireBuffer, type WireFrame, writeFrame, writeNetpacketFrame } from './wire';
 
 const PING_INTERVAL_MS = 3000;
-/** Recipient id on client->host NETPACKETs: RetroArch "all playing clients". */
-const NETPACKET_BROADCAST = 0xffff;
+/** Round trips kept: about 15 s at one ping every 3 s. */
+const RTT_SAMPLES = 5;
+/** RetroArch answers at once, but drops a wrong password silently, and a relay may hide the drop. */
+const ANSWER_TIMEOUT_MS = 15000;
 
 /**
  * Headless RetroArch netplay client (netpacket mode), wire-compatible with
@@ -58,6 +60,11 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
   /** Protocol negotiated in the host header; gates PING (netplay_frontend.c:5385). */
   private hostProtocol = 0;
   private pingTimer: NodeJS.Timeout | null = null;
+  /** From connect until the host's INFO accepts us. */
+  private answerTimer: NodeJS.Timeout | null = null;
+  /** Send time of the unanswered PING_REQUEST. */
+  private pingSentAt: number | null = null;
+  private readonly rtts: number[] = [];
 
   constructor(private readonly opts: NetplayJoinOptions) {
     super();
@@ -69,6 +76,13 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
 
   get playingPeers(): ReadonlyMap<number, NetplayPeer> {
     return this.peers;
+  }
+
+  /** Every netpacket goes through the host, so each peer is one host round trip away. */
+  peerRttMs(): number | undefined {
+    if (this.rtts.length === 0) return undefined;
+    const sorted = [...this.rtts].sort((a, b) => a - b);
+    return sorted[sorted.length >> 1];
   }
 
   connect(): Promise<void> {
@@ -88,6 +102,8 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
       let connected = false;
       sock.on('connect', () => {
         connected = true;
+        this.answerTimer = setTimeout(() => this.onNoAnswer(), ANSWER_TIMEOUT_MS);
+        this.answerTimer.unref?.();
         // The relay routes on the session id, so it must precede the header.
         if (prelude) sock.write(prelude);
         sock.write(
@@ -109,11 +125,11 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
     });
   }
 
-  sendPacket(buf: Buffer): void {
+  sendPacket(buf: Buffer, dest: number = NETPACKET_BROADCAST): void {
     if (!this.sessionStarted) return;
     const sock = this.socket;
     if (!sock || sock.destroyed || !sock.writable) return;
-    sock.write(writeNetpacketFrame(NETPACKET_BROADCAST, buf));
+    sock.write(writeNetpacketFrame(dest, buf));
   }
 
   close(graceful = true): void {
@@ -202,6 +218,11 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
         this.send(writeFrame(NetplayCmd.PING_RESPONSE));
         break;
       case NetplayCmd.PING_RESPONSE:
+        if (this.pingSentAt !== null) {
+          this.rtts.push(Date.now() - this.pingSentAt);
+          if (this.rtts.length > RTT_SAMPLES) this.rtts.shift();
+          this.pingSentAt = null;
+        }
         break;
       case NetplayCmd.PLAYER_CHAT: {
         const body = frame.payload.subarray(NICK_LEN);
@@ -228,6 +249,7 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
   private onInfo(payload: Buffer): void {
     // Any INFO (even empty) means the host accepted our password.
     this.gotInfo = true;
+    this.clearAnswerTimer();
     const coreName = this.opts.coreName ?? 'gpSP';
     const coreVersion = this.opts.coreVersion ?? GPSP_NETPACKET_VERSION;
     if (payload.length === 0) {
@@ -250,9 +272,8 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
   private onSync(payload: Buffer): void {
     const sync = parseSyncPayload(payload);
     this._localClientId = sync.clientNum;
-    if (sync.clientNum !== 1) {
-      // Client num maps to the GBA MULTI id; anything but 1 would corrupt
-      // slot attribution on the physical link.
+    const expected = this.opts.expectClientId;
+    if (expected !== undefined && sync.clientNum !== expected) {
       this.fail('bad-client-id', `host assigned client ${sync.clientNum}`);
       return;
     }
@@ -291,6 +312,7 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
     if (this.hostProtocol < 6) return;
     this.pingTimer = setInterval(() => {
       this.send(writeFrame(NetplayCmd.PING_REQUEST));
+      this.pingSentAt = Date.now();
     }, PING_INTERVAL_MS);
     this.pingTimer.unref();
   }
@@ -300,6 +322,19 @@ export class NetplayClient extends EventEmitter<NetplayEvents> implements INetpl
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
+    this.clearAnswerTimer();
+  }
+
+  private clearAnswerTimer(): void {
+    if (this.answerTimer !== null) clearTimeout(this.answerTimer);
+    this.answerTimer = null;
+  }
+
+  private onNoAnswer(): void {
+    this.answerTimer = null;
+    if (this.gotInfo || this.closedEmitted) return;
+    if (this.sentPassword) this.fail('wrong-password');
+    else this.fail('socket-error', 'the host did not answer');
   }
 
   private send(buf: Buffer): void {

@@ -19,6 +19,17 @@ import { cableTypeText, firmwareText, linkPhaseText, sessionStatusText } from '.
         <span class="text-neutral-700 dark:text-neutral-200">{{ adapterText() }}</span>
       </button>
 
+      @if (bridge.esp32().state !== 'absent') {
+        <button
+          (click)="deviceClick.emit()"
+          title="ESP32 bridge details"
+          class="flex items-center gap-2 rounded-full border border-neutral-200 px-3 py-1 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+        >
+          <app-status-dot [color]="espDot()" />
+          <span class="text-neutral-700 dark:text-neutral-200">{{ espText() }}</span>
+        </button>
+      }
+
       <span class="flex items-center gap-2 px-2 py-1 text-sm">
         <app-status-dot [color]="linkDot()" />
         <span class="text-neutral-600 dark:text-neutral-300">{{ linkText() }}</span>
@@ -78,6 +89,21 @@ export class StatusBar {
     const name = fw ? `GB-Link ${firmwareText(fw)}` : 'GB-Link';
     const cable = this.bridge.cableType();
     return cable !== null ? `${name} · ${cableTypeText(cable)}` : name;
+  });
+
+  protected readonly espDot = computed<DotColor>(() => {
+    const esp = this.bridge.esp32();
+    if (esp.state === 'error') return 'amber';
+    if (esp.state === 'present') return esp.keys === false ? 'amber' : 'green';
+    return 'gray';
+  });
+
+  protected readonly espText = computed(() => {
+    const esp = this.bridge.esp32();
+    if (esp.state === 'error') return 'ESP32 — not answering';
+    const name = esp.version ? `ESP32 bridge v${esp.version}` : 'ESP32 bridge';
+    if (esp.keys === false) return `${name} · no Switch keys`;
+    return name;
   });
 
   protected readonly linkDot = computed<DotColor>(() => {

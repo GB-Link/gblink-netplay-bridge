@@ -3,6 +3,8 @@ import { FormsModule } from '@angular/forms';
 import { BridgeService } from '../services/bridge.service';
 import { UiStateService } from '../services/ui-state.service';
 import type { LobbyRoom } from '../../../../shared/ipc';
+import type { LinkGame } from '../../../../engine/types';
+import { badgeForRoom, gameForRoom } from '../../../../shared/games';
 
 @Component({
   selector: 'app-lobby-list',
@@ -31,6 +33,14 @@ import type { LobbyRoom } from '../../../../shared/ipc';
       >{{ loading() ? 'Refreshing…' : 'Refresh' }}</button>
       <span class="text-xs text-neutral-400">auto 30 s</span>
     </div>
+    <p class="mb-2 text-xs text-neutral-500">
+      Every gpSP room is listed. The lobby does not say whether a Pokémon host plays by link cable or
+      Wireless Adapter: pick on the play card what the host runs (the app warns once their game starts
+      sending the other kind).
+      @if (ui.game() === 'rfu') {
+        Wireless Adapter games can't join Relay rooms: the relay adds more delay than they can take.
+      }
+    </p>
 
     <div
       class="overflow-x-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"
@@ -53,6 +63,11 @@ import type { LobbyRoom } from '../../../../shared/ipc';
             <tr class="border-b border-neutral-100 last:border-0 dark:border-neutral-800">
               <td class="px-3 py-2" [title]="'CRC32 ' + crcHex(room)">
                 {{ room.gameName }}
+                @if (badgeFor(room); as badge) {
+                  <span
+                    class="ml-1 rounded bg-neutral-200 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300"
+                  >{{ badge }}</span>
+                }
                 <span class="block text-xs text-neutral-400">
                   {{ room.coreName }} {{ room.coreVersion }}
                 </span>
@@ -82,7 +97,8 @@ import type { LobbyRoom } from '../../../../shared/ipc';
               <td class="px-3 py-2 text-right">
                 <button
                   (click)="joinClicked(room)"
-                  [disabled]="!room.joinable || bridge.sessionActive()"
+                  [disabled]="!room.joinable || bridge.sessionActive() || relayRefused(room)"
+                  [attr.title]="relayRefused(room) ? relayRefusedTitle : null"
                   class="rounded border border-emerald-600 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-400 dark:hover:bg-emerald-950"
                 >Join</button>
               </td>
@@ -134,6 +150,8 @@ export class LobbyList {
   /** Off = the default joinable-gpsp filter; on = every announced room. */
   protected readonly showAll = signal(false);
   protected readonly search = signal('');
+
+  protected readonly relayRefusedTitle = "Wireless Adapter games can't join through a relay";
 
   protected readonly pendingRoom = signal<LobbyRoom | null>(null);
   protected modalPassword = '';
@@ -200,8 +218,30 @@ export class LobbyList {
     }
   }
 
+  protected badgeFor(room: LobbyRoom): string | null {
+    return badgeForRoom(room.gameName);
+  }
+
+  /** A recognised room name selects the game; otherwise the user's pick stays. */
+  private gameFor(room: LobbyRoom): LinkGame {
+    return gameForRoom(room.gameName, this.ui.game()) ?? this.ui.game();
+  }
+
+  /** A relay's delay is more than the Wireless Adapter games can take. */
+  protected relayRefused(room: LobbyRoom): boolean {
+    return room.hostMethod === 3 && this.gameFor(room) === 'rfu';
+  }
+
   private async tryJoinRoom(room: LobbyRoom, password?: string): Promise<void> {
     const nick = this.ui.effectiveNick();
+    const game = this.gameFor(room);
+    if (game !== this.ui.game()) this.ui.setGame(game);
+    const setup = {
+      game,
+      console: this.ui.console(),
+      switchRoom: this.ui.switchRoom(),
+      nationalBypass: this.ui.nationalBypass(),
+    };
     if (room.hostMethod === 3) {
       await this.bridge.joinRelay({
         addr: room.mitmIp,
@@ -209,9 +249,10 @@ export class LobbyList {
         session: room.mitmSession,
         nick,
         password,
+        ...setup,
       });
     } else {
-      await this.bridge.joinDirect({ host: room.ip, port: room.port, nick, password });
+      await this.bridge.joinDirect({ host: room.ip, port: room.port, nick, password, ...setup });
     }
   }
 

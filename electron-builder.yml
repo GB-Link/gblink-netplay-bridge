@@ -2,8 +2,9 @@ appId: com.gblink.bridge
 productName: GBLink Netplay Bridge
 executableName: gblink-bridge
 
-# The usb module ships N-API prebuilds that are ABI-stable under Electron;
-# rebuilding from source would require libudev headers on the build host.
+# The usb and serialport modules ship N-API prebuilds that are ABI-stable
+# under Electron; rebuilding from source would require libudev headers on
+# the build host.
 npmRebuild: false
 
 directories:
@@ -18,6 +19,8 @@ files:
 
 asarUnpack:
   - node_modules/usb/**
+  - node_modules/serialport/**
+  - node_modules/@serialport/**
 
 extraResources:
   - from: resources/70-gblink.rules

@@ -1,15 +1,33 @@
-import type { CloseReason, FirmwareVersion, LinkPhase } from '../engine/types';
+import type {
+  BridgeCounters,
+  CableSelection,
+  CloseReason,
+  Console,
+  FirmwareVersion,
+  LinkGame,
+  LinkPhase,
+  SwitchRoom,
+} from '../engine/types';
 
 export type RelayHandle = 'nyc' | 'madrid' | 'saopaulo' | 'singapore' | 'custom';
 
-export interface JoinDirectRequest {
+export interface SessionSetup {
+  game?: LinkGame;
+  console?: Console;
+  /** Switch cable link, joining: the group the bridge leads for the Switch. */
+  switchRoom?: SwitchRoom;
+  /** Switch: let FireRed/LeafGreen and Emerald link before the National Dex. */
+  nationalBypass?: boolean;
+}
+
+export interface JoinDirectRequest extends SessionSetup {
   host: string;
   port: number;
   nick: string;
   password?: string;
 }
 
-export interface JoinRelayRequest {
+export interface JoinRelayRequest extends SessionSetup {
   addr: string;
   port: number;
   /** base64 12-byte mitm_session from the lobby entry. */
@@ -18,7 +36,7 @@ export interface JoinRelayRequest {
   password?: string;
 }
 
-export interface HostRequest {
+export interface HostRequest extends SessionSetup {
   port: number;
   nick: string;
   password?: string;
@@ -55,6 +73,8 @@ export interface LobbyRoom {
   spectatorCount: number;
   /** Derived: passes the joinable-gpsp filter. */
   joinable: boolean;
+  /** Derived from gameName. */
+  game?: LinkGame | 'pokemon';
   /** Found via LAN discovery rather than the public lobby. */
   lan?: boolean;
 }
@@ -62,8 +82,12 @@ export interface LobbyRoom {
 export interface AppSettings {
   nick: string;
   defaultPort: number;
-  /** Manual link-cable selection; 'auto' uses the firmware's detection. */
-  cableOverride: 'auto' | 'gba' | 'gbc';
+  /** Which link protocol the play card starts with. */
+  game: LinkGame;
+  /** Which console the play card starts with. */
+  console: Console;
+  switchRoom: SwitchRoom;
+  nationalBypass: boolean;
   /** Last address typed into Join, restored on next launch. */
   lastAddress: string;
   /** Last port used for hosting. */
@@ -98,6 +122,17 @@ export type SessionPhase =
   | 'hosting'
   | 'closed';
 
+/** The ESP32 bridge board in front of a Switch. */
+export interface Esp32State {
+  state: 'absent' | 'present' | 'error';
+  path?: string;
+  version?: string;
+  chip?: string;
+  /** The board holds the Switch keys FireRed rooms need; undefined until probed. */
+  keys?: boolean;
+  detail?: string;
+}
+
 export type BridgeEvent =
   | {
       type: 'device';
@@ -105,18 +140,25 @@ export type BridgeEvent =
       state?: DeviceStateName;
       firmware?: FirmwareVersion;
       cableType?: number;
+      /** Watcher verdict: adapter present but not openable. */
+      blocked?: boolean;
       raw?: number;
     }
+  | ({ type: 'esp32' } & Esp32State)
   | {
       type: 'session';
       phase: SessionPhase;
+      game?: LinkGame;
+      console?: Console;
       localClientId?: number;
       peers: { id: number; nick: string }[];
       closeReason?: CloseReason;
       detail?: string;
     }
   | { type: 'link'; phase: LinkPhase; raw?: number }
-  | { type: 'counters'; txPackets: number; rxPackets: number }
+  /** Wireless: the room the device joined (the host's nick), or null when it left. */
+  | { type: 'room'; host: string | null }
+  | ({ type: 'counters' } & BridgeCounters)
   | {
       type: 'announce';
       status: 'ok' | 'failed' | 'not-connectable' | 'off';
@@ -140,6 +182,8 @@ export interface BridgeApi {
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   resetSettings(): Promise<AppSettings>;
   installUdevRule(): Promise<{ ok: boolean; detail?: string }>;
+  /** Persist the link-cable selection on the adapter (firmware 0x4b). */
+  setCableSelection(selection: CableSelection): Promise<FirmwareVersion>;
   openExternal(url: string): Promise<void>;
   copyText(text: string): Promise<void>;
   onEvent(cb: (ev: BridgeEvent) => void): () => void;
@@ -157,6 +201,7 @@ export const IPC = {
   setSettings: 'settings:set',
   resetSettings: 'settings:reset',
   installUdevRule: 'app:installUdevRule',
+  setCableSelection: 'device:setCableSelection',
   openExternal: 'app:openExternal',
   copyText: 'app:copyText',
   event: 'bridge:event',

@@ -1,10 +1,18 @@
 import { Injectable, NgZone, computed, inject, signal } from '@angular/core';
-import type { CloseReason, FirmwareVersion, LinkPhase } from '../../../../engine/types';
+import type {
+  CableSelection,
+  CloseReason,
+  Console,
+  FirmwareVersion,
+  LinkGame,
+  LinkPhase,
+} from '../../../../engine/types';
 import type {
   AppSettings,
   BridgeApi,
   BridgeEvent,
   DeviceStateName,
+  Esp32State,
   HostRequest,
   JoinDirectRequest,
   JoinRelayRequest,
@@ -53,9 +61,18 @@ export class BridgeService {
   readonly deviceState = signal<DeviceStateName>('absent');
   readonly firmware = signal<FirmwareVersion | null>(null);
   readonly cableType = signal<number | null>(null);
+  /** The ESP32 bridge board, when one is plugged in. */
+  readonly esp32 = signal<Esp32State>({ state: 'absent' });
   readonly linkPhase = signal<LinkPhase>('idle');
   readonly sessionPhase = signal<SessionPhase>('idle');
+  /** Game of the active/last session, from the main process. */
+  readonly game = signal<LinkGame>('gen3');
+  readonly console = signal<Console>('gba');
+  /** Wireless: the host of the room the device is in. */
+  readonly room = signal<string | null>(null);
   readonly localClientId = signal<number | null>(null);
+  /** The session was started by joining someone else's, not by hosting one. */
+  readonly joining = signal(false);
   readonly closeReason = signal<CloseReason | null>(null);
   readonly closeDetail = signal<string | null>(null);
   readonly peers = signal<{ id: number; nick: string }[]>([]);
@@ -93,12 +110,15 @@ export class BridgeService {
   }
 
   joinDirect(req: JoinDirectRequest): Promise<void> {
+    this.joining.set(true);
     return this.api.joinDirect(req);
   }
   joinRelay(req: JoinRelayRequest): Promise<void> {
+    this.joining.set(true);
     return this.api.joinRelay(req);
   }
   host(req: HostRequest): Promise<void> {
+    this.joining.set(false);
     return this.api.host(req);
   }
   stop(): Promise<void> {
@@ -122,6 +142,11 @@ export class BridgeService {
   installUdevRule(): Promise<{ ok: boolean; detail?: string }> {
     return this.api.installUdevRule();
   }
+  async setCableSelection(selection: CableSelection): Promise<FirmwareVersion> {
+    const fw = await this.api.setCableSelection(selection);
+    this.firmware.set(fw);
+    return fw;
+  }
   openExternal(url: string): Promise<void> {
     return this.api.openExternal(url);
   }
@@ -143,6 +168,12 @@ export class BridgeService {
       case 'device': {
         if (ev.firmware) this.firmware.set(ev.firmware);
         if (ev.cableType !== undefined) this.cableType.set(ev.cableType);
+        // The watcher's verdict is authoritative: a later successful probe
+        // must clear a banner an earlier failure raised.
+        if (ev.blocked !== undefined) {
+          this.usbBlocked.set(ev.blocked);
+          if (!ev.blocked) this.usbBlockedDetail.set(null);
+        }
         if (ev.state !== undefined) {
           this.deviceState.set(ev.state);
           if (ev.state === 'access-denied') this.usbBlocked.set(true);
@@ -155,19 +186,39 @@ export class BridgeService {
         }
         break;
       }
+      case 'esp32': {
+        const { type: _type, ...state } = ev;
+        // A session's own reports carry less than the watcher's probe: keep what is known.
+        this.esp32.update((prev) =>
+          state.state === 'present' && prev.state === 'present'
+            ? {
+                ...prev,
+                ...Object.fromEntries(Object.entries(state).filter(([, v]) => v !== undefined)),
+              }
+            : state,
+        );
+        this.pushTimeline('device', `ESP32: ${state.state}${state.version ? ` ${state.version}` : ''}`);
+        break;
+      }
       case 'link': {
         this.linkPhase.set(ev.phase);
         this.pushTimeline('link', `Link: ${ev.phase}`);
         break;
       }
+      case 'room':
+        this.room.set(ev.host);
+        break;
       case 'session': {
         this.sessionPhase.set(ev.phase);
+        if (ev.game) this.game.set(ev.game);
+        if (ev.console) this.console.set(ev.console);
         this.peers.set(ev.peers);
         this.localClientId.set(ev.localClientId ?? null);
         if (ev.phase === 'closed') {
           this.closeReason.set(ev.closeReason ?? null);
           this.closeDetail.set(ev.detail ?? null);
           this.hostReady.set(null);
+          this.room.set(null);
           this.announce.set({ status: 'off', at: Date.now() });
         } else {
           this.closeReason.set(null);
@@ -211,7 +262,10 @@ export class BridgeService {
 const MOCK_DEFAULT_SETTINGS: AppSettings = {
     nick: 'Anonymous',
     defaultPort: 55435,
-    cableOverride: 'auto',
+    game: 'gen3',
+    console: 'gba',
+    switchRoom: 'trade',
+    nationalBypass: false,
     lastAddress: '',
     hostPort: 55435,
     announce: true,
@@ -263,10 +317,11 @@ class MockBridge implements BridgeApi {
       this.emit({
         type: 'device',
         state: 'present',
-        firmware: { major: 2, minor: 3, patch: 1 },
+        firmware: { major: 2, minor: 2, patch: 7, cableSelection: 'auto' },
         cableType: 0,
       });
       this.log('info', 'mock: GB-Link adapter attached');
+      this.emit({ type: 'esp32', state: 'present', path: '/dev/ttyACM1', version: '2.1.5', chip: 'esp32s3', keys: true });
     });
     this.at(900, () => this.emit({ type: 'device', state: 'device-ready' }));
     this.at(1400, () => {
@@ -435,6 +490,24 @@ class MockBridge implements BridgeApi {
       },
       {
         ...base,
+        username: 'AndyOrangeStar',
+        gameName: 'Advance Wars 2 - Black Hole Rising (USA)',
+        gameCrc: 0x5bf01e28,
+        ip: '203.0.113.77',
+        port: 55435,
+        hasPassword: false,
+        mitmIp: '',
+        mitmPort: 0,
+        mitmSession: '',
+        hostMethod: 2,
+        country: 'US',
+        connectable: true,
+        playerCount: 1,
+        joinable: true,
+        game: 'aw2',
+      },
+      {
+        ...base,
         username: 'SnesFan99',
         gameName: 'Super Metroid (USA)',
         gameCrc: 0xd63ed5f8,
@@ -519,6 +592,13 @@ class MockBridge implements BridgeApi {
   async installUdevRule(): Promise<{ ok: boolean; detail?: string }> {
     this.log('info', 'mock: udev rule installed');
     return { ok: true };
+  }
+
+  async setCableSelection(selection: CableSelection): Promise<FirmwareVersion> {
+    this.log('info', `mock: cable selection stored: ${selection}`);
+    const fw: FirmwareVersion = { major: 2, minor: 2, patch: 7, cableSelection: selection };
+    this.emit({ type: 'device', state: 'present', firmware: fw });
+    return fw;
   }
 
   async openExternal(url: string): Promise<void> {
