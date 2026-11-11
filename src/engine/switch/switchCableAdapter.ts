@@ -2,13 +2,10 @@ import { EventEmitter } from 'node:events';
 import { FwStatus } from '../types';
 import type {
   AdapterEvents,
-  AdapterRole,
-  AwStats,
-  AwTimingOverride,
-  CableSelection,
   FirmwareVersion,
   IGBLinkAdapter,
   LinkGame,
+  PlayerSettings,
   Round,
   SwitchRoom,
 } from '../types';
@@ -80,7 +77,8 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
 
   private deviceStarted = false;
   private deviceReady = false;
-  private role: AdapterRole = 'slave';
+  /** Seat 0: this side is the cable parent. */
+  private seat = 0;
   /** The mode is entered: a game runs, or waits for the last one's group to empty. */
   private armed = false;
   private game: CableGame | null = null;
@@ -145,7 +143,8 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
     await this.device.stop();
   }
 
-  async initLinkMode(role: AdapterRole, _game: LinkGame = 'gen3', _awTiming?: AwTimingOverride): Promise<void> {
+  async initLinkMode(_game: LinkGame, players?: PlayerSettings): Promise<void> {
+    if (!players) throw new Error('the cable link needs player settings');
     const last = this.game;
     const live = last !== null && !this.ended;
     const switchStays = last !== null && this.ended && last.inGroup();
@@ -155,13 +154,13 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
     else safeTeardown(last);
     // Every mode entry opens with a Cancel, on which the firmware reports a live link closed.
     if (live) this.emit('status', FwStatus.LinkClosed);
-    this.role = role;
+    this.seat = players.seat;
     this.ended = false;
     this.readyAfter = 0;
     this.armed = true;
     if (!this.leaving) this.game = this.newGame();
     this.status(FwStatus.DeviceReady);
-    this.status(FwStatus.AwaitMode);
+    this.status(FwStatus.AwaitPlayerSettings);
     this.readyTimer = setInterval(() => this.pollReady(), READY_POLL_MS);
     this.readyTimer.unref?.();
   }
@@ -173,12 +172,12 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
     game.reset();
     this.sentClose = this.gotClose = this.exitSeen = false;
     this.cafeStreak = 0;
-    if (this.role === 'master') this.handshake = true;
+    if (this.seat !== 0) this.handshake = true;
     else this.up();
   }
 
   async connectLink(): Promise<void> {
-    if (this.role !== 'master' || !this.handshake) return;
+    if (this.seat === 0 || !this.handshake) return;
     this.handshake = false;
     this.up();
   }
@@ -189,19 +188,12 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
     if (had) this.status(FwStatus.LinkClosed);
   }
 
-  async writeRounds(buf: Buffer): Promise<void> {
-    if (buf.length !== 64) throw new Error(`writeRounds requires exactly 64 bytes, got ${buf.length}`);
+  async writeRounds(_seat: number, rounds: Round[]): Promise<void> {
     const game = this.game;
     if (!game || (!this.connected && !this.handshake)) return;
-    for (let r = 0; r < 4; r++) {
-      const words: number[] = [];
-      let any = false;
-      for (let w = 0; w < CMD_WORDS; w++) {
-        const word = buf.readUInt16LE(r * 16 + w * 2);
-        words.push(word);
-        if (word) any = true;
-      }
-      if (!any) continue;
+    for (const round of rounds) {
+      const words = [...round];
+      if (!words.some((w) => w)) continue;
       if (words[0] === CMD_READY_CLOSE_LINK) this.gotClose = true;
       if (words[0] === CMD_SEND_HELD_KEYS && (words[1]! & 0xff) === KEY_EXIT_ROOM) this.exitSeen = true;
       game.gameCommand(words);
@@ -215,15 +207,7 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
     return { major: Number(m?.[1] ?? 0), minor: Number(m?.[2] ?? 0), patch: Number(m?.[3] ?? 0), device: 'esp32' };
   }
 
-  async getCableType(): Promise<number> {
-    throw new Error('a Switch has no link cable');
-  }
-
-  async setCableSelection(_selection: CableSelection): Promise<void> {
-    throw new Error('a Switch has no link cable');
-  }
-
-  async writeAwChunk(_buf: Buffer): Promise<void> {
+  async writeAwChunk(_seat: number, _stream: Buffer): Promise<void> {
     throw new Error('Advance Wars is not available on the Switch');
   }
 
@@ -233,10 +217,6 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
 
   async probeWireless(): Promise<boolean> {
     return false;
-  }
-
-  async getAwStats(): Promise<AwStats> {
-    throw new Error('Advance Wars is not available on the Switch');
   }
 
   setNationalBypass(value: boolean): void {
@@ -263,7 +243,7 @@ export class SwitchCableAdapter extends EventEmitter<AdapterEvents> implements I
   // ---- the two games ----
 
   private newGame(): CableGame {
-    return this.role === 'slave' ? this.parentGame() : this.childGame();
+    return this.seat === 0 ? this.parentGame() : this.childGame();
   }
 
   private boardFrame(frame: Rfu1Frame): void {

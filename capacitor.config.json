@@ -1,0 +1,13 @@
+{
+  "appId": "com.gblink.bridge",
+  "appName": "GBLink Netplay Bridge",
+  "webDir": "dist/android-web",
+  "android": {
+    "minWebViewVersion": 100
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

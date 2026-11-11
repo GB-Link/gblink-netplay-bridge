@@ -1,7 +1,7 @@
 import { GBLinkAdapter } from './engine/usb/adapter';
 import { EspDevice } from './engine/esp32/espDevice';
-import { GBLinkEngine, formatAwStats, type EngineStartOptions } from './engine/index';
-import { FwStatus, type AwTimingOverride, type Console, type LinkGame, type SwitchRoom } from './engine/types';
+import { GBLinkEngine, type EngineStartOptions } from './engine/index';
+import { FwStatus, fwAtLeast, type Console, type LinkGame, type SwitchRoom } from './engine/types';
 import { isConsole, isLinkGame, isSwitchRoom } from './shared/games';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -38,25 +38,14 @@ function roomArg(): SwitchRoom {
   return value;
 }
 
-function awTimingArgs(): AwTimingOverride | undefined {
-  const pxg = arg('aw-pxg-us');
-  const sync = arg('aw-sync-us');
-  if (pxg === undefined && sync === undefined) return undefined;
-  const timing: AwTimingOverride = {};
-  if (pxg !== undefined) timing.pxgUs = Number(pxg);
-  if (sync !== undefined) timing.syncUs = Number(sync);
-  return timing;
-}
-
 /** The device and play options every session command shares. */
-function setupArgs(): Pick<EngineStartOptions, 'game' | 'console' | 'espPort' | 'switchRoom' | 'nationalBypass' | 'awTiming'> {
+function setupArgs(): Pick<EngineStartOptions, 'game' | 'console' | 'espPort' | 'switchRoom' | 'nationalBypass'> {
   return {
     game: gameArg(),
     console: consoleArg(),
     espPort: arg('esp-port'),
     switchRoom: roomArg(),
     nationalBypass: flag('national-bypass'),
-    awTiming: awTimingArgs(),
   };
 }
 
@@ -70,12 +59,9 @@ async function probe(): Promise<void> {
   const fw = await adapter.getFirmwareInfo();
   log(
     `firmware ${fw.major}.${fw.minor}.${fw.patch}` +
-      (fw.cableSelection !== undefined ? ` (cable selection: ${fw.cableSelection})` : '') +
-      (fw.minor >= 2 ? `, wireless adapter mode: ${(await adapter.probeWireless()) ? 'yes' : 'no'}` : ''),
+      (fwAtLeast(fw, 2, 2, 0) ? `, wireless adapter mode: ${(await adapter.probeWireless()) ? 'yes' : 'no'}` : ''),
   );
-  await adapter.initLinkMode((arg('role') as 'master' | 'slave') ?? 'master', gameArg(), awTimingArgs());
-  const cable = await adapter.getCableType().catch(() => -1);
-  log(`cable type ${cable}`);
+  await adapter.initLinkMode(gameArg(), { playerCount: 2, seat: Number(arg('seat', '1')) });
   log('probe OK — watching statuses, Ctrl-C to exit');
 }
 
@@ -105,7 +91,6 @@ async function run(opts: EngineStartOptions): Promise<void> {
   engine.on('session', (s) => log(`session: ${s.phase}${s.closeReason ? ` (${s.closeReason})` : ''}${s.detail ? ` ${s.detail}` : ''}`));
   engine.on('peers', (peers) => log(`peers: ${peers.map((p) => `${p.id}:${p.nick}`).join(', ') || 'none'}`));
   engine.on('host-ready', (h) => log(`hosting on port ${h.extPort}${h.relaySessionId ? ` relay session ${h.relaySessionId}` : ''}`));
-  if (flag('stats')) engine.on('aw-stats', (s) => log(formatAwStats(s)));
   engine.on('warn', (msg) => log(`WARN: ${msg}`));
   engine.on('log', (msg) => log(msg));
   engine.on('error', (e) => log(`ERROR: ${e.message}`));
@@ -122,7 +107,8 @@ const USAGE = [
   '  --esp-port <path>            the ESP32 serial port (default: the first one found)',
   '  --room trade|single|double   Switch cable link, joining: the group led for the Switch',
   '  --national-bypass            Switch: link FireRed/LeafGreen and Emerald before the National Dex',
-  '  --nick N  --password P  --relay-session S  --port P  --crc HEX  --stats',
+  '  --nick N  --password P  --relay-session S  --port P  --crc HEX',
+  '  --seat 0|1                   probe: the GBA is the link parent (0) or a child (1, default)',
 ].join('\n');
 
 async function main(): Promise<void> {

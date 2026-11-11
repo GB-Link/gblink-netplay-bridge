@@ -59,12 +59,12 @@ const RELAY_CHOICES: { value: RelayChoice; label: string }[] = [
       <div class="mb-3 flex flex-wrap items-center gap-2">
         <span class="text-sm text-neutral-600 dark:text-neutral-400">Game</span>
         <div
-          class="inline-flex overflow-hidden rounded border border-neutral-300 text-sm dark:border-neutral-700"
+          class="inline-flex overflow-hidden rounded border border-neutral-300 text-sm dark:border-neutral-700 max-sm:grid max-sm:w-full max-sm:grid-cols-2"
         >
           @for (g of gameChoices(); track g) {
             <button
               (click)="selectGame(g)"
-              class="px-3 py-1.5 first:border-0 border-l border-neutral-300 dark:border-neutral-700"
+              class="px-3 py-1.5 first:border-0 border-l border-neutral-300 dark:border-neutral-700 max-sm:border-l-0 max-sm:even:border-l max-sm:[&:nth-child(n+3)]:border-t"
               [class.bg-neutral-200]="ui.game() === g"
               [class.font-semibold]="ui.game() === g"
               [class.dark:bg-neutral-700]="ui.game() === g"

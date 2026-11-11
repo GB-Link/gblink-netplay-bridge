@@ -1,6 +1,5 @@
 import { Injectable, NgZone, computed, inject, signal } from '@angular/core';
 import type {
-  CableSelection,
   CloseReason,
   Console,
   FirmwareVersion,
@@ -46,8 +45,10 @@ const USB_BLOCKED_RE =
   /LIBUSB_ERROR_ACCESS|LIBUSB_ERROR_BUSY|LIBUSB_ERROR_NOT_SUPPORTED|EACCES|access denied|permission denied|cannot open GB-Link|cannot claim GB-Link/i;
 
 export const UDEV_RULE_PATH = '/etc/udev/rules.d/70-gblink.rules';
-export const UDEV_RULE_TEXT =
-  'SUBSYSTEM=="usb", ATTRS{idVendor}=="2fe3", ATTRS{idProduct}=="000a", MODE="0660", TAG+="uaccess", GROUP="plugdev"';
+export const UDEV_RULE_TEXT = [
+  'SUBSYSTEM=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="b011", MODE="0660", TAG+="uaccess", GROUP="plugdev"',
+  'SUBSYSTEM=="usb", ATTRS{idVendor}=="2fe3", ATTRS{idProduct}=="000a", MODE="0660", TAG+="uaccess", GROUP="plugdev"',
+].join('\n');
 
 @Injectable({ providedIn: 'root' })
 export class BridgeService {
@@ -60,7 +61,6 @@ export class BridgeService {
 
   readonly deviceState = signal<DeviceStateName>('absent');
   readonly firmware = signal<FirmwareVersion | null>(null);
-  readonly cableType = signal<number | null>(null);
   /** The ESP32 bridge board, when one is plugged in. */
   readonly esp32 = signal<Esp32State>({ state: 'absent' });
   readonly linkPhase = signal<LinkPhase>('idle');
@@ -142,11 +142,6 @@ export class BridgeService {
   installUdevRule(): Promise<{ ok: boolean; detail?: string }> {
     return this.api.installUdevRule();
   }
-  async setCableSelection(selection: CableSelection): Promise<FirmwareVersion> {
-    const fw = await this.api.setCableSelection(selection);
-    this.firmware.set(fw);
-    return fw;
-  }
   openExternal(url: string): Promise<void> {
     return this.api.openExternal(url);
   }
@@ -167,23 +162,19 @@ export class BridgeService {
     switch (ev.type) {
       case 'device': {
         if (ev.firmware) this.firmware.set(ev.firmware);
-        if (ev.cableType !== undefined) this.cableType.set(ev.cableType);
         // The watcher's verdict is authoritative: a later successful probe
         // must clear a banner an earlier failure raised.
         if (ev.blocked !== undefined) {
           this.usbBlocked.set(ev.blocked);
           if (!ev.blocked) this.usbBlockedDetail.set(null);
         }
-        if (ev.state !== undefined) {
-          this.deviceState.set(ev.state);
-          if (ev.state === 'access-denied') this.usbBlocked.set(true);
-          else if (ev.state === 'device-ready') {
-            this.usbBlocked.set(false);
-            this.usbBlockedDetail.set(null);
-          }
-          this.pushTimeline('device', `Adapter: ${ev.state}`);
-          if (ev.state === 'absent') this.cableType.set(null);
+        this.deviceState.set(ev.state);
+        if (ev.state === 'access-denied') this.usbBlocked.set(true);
+        else if (ev.state === 'device-ready') {
+          this.usbBlocked.set(false);
+          this.usbBlockedDetail.set(null);
         }
+        this.pushTimeline('device', `Adapter: ${ev.state}`);
         break;
       }
       case 'esp32': {
@@ -317,8 +308,7 @@ class MockBridge implements BridgeApi {
       this.emit({
         type: 'device',
         state: 'present',
-        firmware: { major: 2, minor: 2, patch: 7, cableSelection: 'auto' },
-        cableType: 0,
+        firmware: { major: 3, minor: 0, patch: 0 },
       });
       this.log('info', 'mock: GB-Link adapter attached');
       this.emit({ type: 'esp32', state: 'present', path: '/dev/ttyACM1', version: '2.1.5', chip: 'esp32s3', keys: true });
@@ -592,13 +582,6 @@ class MockBridge implements BridgeApi {
   async installUdevRule(): Promise<{ ok: boolean; detail?: string }> {
     this.log('info', 'mock: udev rule installed');
     return { ok: true };
-  }
-
-  async setCableSelection(selection: CableSelection): Promise<FirmwareVersion> {
-    this.log('info', `mock: cable selection stored: ${selection}`);
-    const fw: FirmwareVersion = { major: 2, minor: 2, patch: 7, cableSelection: selection };
-    this.emit({ type: 'device', state: 'present', firmware: fw });
-    return fw;
   }
 
   async openExternal(url: string): Promise<void> {

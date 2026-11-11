@@ -13,6 +13,7 @@ import { DeviceDrawer } from './components/device-drawer';
   selector: 'app-root',
   imports: [StatusBar, PlayCard, LobbyList, SessionView, LogDrawer, SettingsModal, DeviceDrawer],
   templateUrl: './app.html',
+  host: { '(window:backbutton)': 'closePanel($event)' },
 })
 export class App {
   protected readonly bridge = inject(BridgeService);
@@ -32,6 +33,14 @@ export class App {
       graceful: reason === 'graceful',
     };
   });
+
+  /** Android's back button closes an open panel before it leaves the app. */
+  protected closePanel(event: Event): void {
+    if (this.settingsOpen()) this.settingsOpen.set(false);
+    else if (this.deviceOpen()) this.deviceOpen.set(false);
+    else return;
+    event.preventDefault();
+  }
 
   protected dismissNotice(): void {
     this.bridge.actionError.set(null);

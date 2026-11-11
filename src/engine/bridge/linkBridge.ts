@@ -4,16 +4,16 @@ import {
   Mpk1State,
   firmwareLabel,
   fwAtLeast,
-  type AdapterRole,
   type IGBLinkAdapter,
   type INetplayEndpoint,
   type LinkPhase,
+  type PlayerSettings,
   type PumpTimings,
   type Round,
 } from '../types';
 import { buildMpk1, parseMpk1 } from '../mpk1';
 import { identifyPacket, mismatchWarning } from '../netplay/protocolMagic';
-import { PacedEmitter, RoundBatcher } from './pumps';
+import { PacedEmitter, hasReservedCommand, isAllZero } from './pumps';
 
 export type BridgeMode = 'join' | 'host';
 
@@ -26,21 +26,18 @@ export const REINIT_DELAY_MS = 750;
 export const SELF_CLOSE_GRACE_MS = 2000;
 /** Consecutive failed link-mode starts before we stop retrying. */
 export const MAX_REINIT_ATTEMPTS = 5;
-/** Firmware with the persistent cable selection (0x4b) the bridge relies on. */
-const GEN3_MIN_FW = { major: 2, minor: 2, patch: 3 };
+/** The first firmware with seats in the mode's commands and data packets. */
+const GEN3_MIN_FW = { major: 3, minor: 0, patch: 0 };
 /**
  * Minimum time between arming the adapter handshake and driving 0x8FFF.
  * The real child GBA needs actual B9A0 exchange rounds (~16 ms each) before
  * the connect word; the packet layer leaves handshake mode the moment IT
- * transmits 0x8FFF (packetLayer.cpp:16-19), acknowledged or not.
+ * transmits 0x8FFF (packetLayer.cpp:17-22), acknowledged or not.
  */
 const CONNECT_GRACE_MS = 150;
 
-const CLOSE_ROUND_BUF = (() => {
-  const buf = Buffer.alloc(64);
-  for (let i = 0; i < 4; i++) buf.writeUInt16LE(0x5fff, i * 16);
-  return buf;
-})();
+const CLOSE_ROUND: Round = Uint16Array.of(0x5fff, 0, 0, 0, 0, 0, 0, 0);
+const CLOSE_ROUNDS = [CLOSE_ROUND, CLOSE_ROUND, CLOSE_ROUND];
 
 interface PeerLink {
   state: number;
@@ -50,8 +47,6 @@ interface PeerLink {
 export interface LinkBridgeEvents {
   'link-phase': [LinkPhase, number?];
   counters: [{ txPackets: number; rxPackets: number }];
-  /** Cable type sampled by the firmware at mode entry (0 GBA, 1 GBC/none). */
-  cable: [number];
   log: [string];
   warn: [string];
   error: [Error];
@@ -61,14 +56,13 @@ export interface LinkBridgeEvents {
  * Translates between the GB-Link firmware relay (statuses + 8-word rounds)
  * and the gpsp MPK1 protocol carried over a netplay endpoint.
  *
- * join: adapter is MASTER (real GBA = child), we mirror gpsp's client FSM
- *       against the host's broadcast state (serial_proto.c:246-370).
- * host: adapter is SLAVE (real GBA = parent), we mirror gpsp's master FSM
+ * join: the real GBA is the child in seat 1 (the adapter clocks it), we mirror
+ *       gpsp's client FSM against the host's broadcast state (serial_proto.c:246-370).
+ * host: the real GBA is the parent in seat 0, we mirror gpsp's master FSM
  *       (serial_proto.c:139-235); the real GBA decides the 0x8FFF timing.
  */
 export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
   private readonly emitter: PacedEmitter;
-  private readonly batcher: RoundBatcher;
 
   private sessionLive = false;
   /** 0xFF03 seen for the currently-live firmware section. */
@@ -123,15 +117,16 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
   ) {
     super();
     this.emitter = new PacedEmitter((state, words) => this.sendMpk1(state, words), timings);
-    this.batcher = new RoundBatcher(
-      (buf) => void this.adapter.writeRounds(buf).catch((e: Error) => this.emit('log', `fw write failed: ${e.message}`)),
-      timings,
-      (msg) => this.emit('log', `batcher anomaly: ${msg}`),
-    );
   }
 
-  get role(): AdapterRole {
-    return this.mode === 'join' ? 'master' : 'slave';
+  get players(): PlayerSettings {
+    // gpsp makes netplay client 0 the MULTI parent, so client ids are seats.
+    return { playerCount: 2, seat: this.mode === 'join' ? 1 : 0 };
+  }
+
+  /** The netplay client whose rounds the adapter plays to the GBA. */
+  private get peerSeat(): number {
+    return this.mode === 'join' ? 0 : 1;
   }
 
   async start(initFirmwareNow = true): Promise<void> {
@@ -165,7 +160,6 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     if (this.relayActive && !this.adapter.emulated) await this.gracefulClose();
     this.teardownPumps();
     this.emitter.dispose();
-    this.batcher.dispose();
     if (this.staleTimer) clearInterval(this.staleTimer);
     if (this.countersTimer) clearInterval(this.countersTimer);
     if (this.evalTimer) clearTimeout(this.evalTimer);
@@ -210,20 +204,12 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
       } else {
         if (!fwAtLeast(fw, GEN3_MIN_FW.major, GEN3_MIN_FW.minor, GEN3_MIN_FW.patch)) {
           throw new Error(
-            `GB-Link firmware ${firmwareLabel(fw)} is too old — Pokémon link needs 2.2.3 or newer (update the adapter from the GBLink launcher)`,
+            `GB-Link firmware ${firmwareLabel(fw)} is too old — Pokémon link needs 3.0.0 or newer (update the adapter from the GBLink launcher)`,
           );
         }
         this.emit('log', `firmware ${firmwareLabel(fw)}`);
       }
-      if (fw.cableSelection && fw.cableSelection !== 'auto') {
-        this.emit('log', `link cable pinned on the adapter: ${fw.cableSelection.toUpperCase()}`);
-      }
-      await this.adapter.initLinkMode(this.role);
-      const cable = await this.adapter.getCableType().catch(() => -1);
-      if (cable >= 0) {
-        this.emit('cable', cable);
-        this.emit('log', `cable type ${cable}`);
-      }
+      await this.adapter.initLinkMode('gen3', this.players);
       this.setPhase('searching');
     } catch (e) {
       this.emit('error', e as Error);
@@ -259,8 +245,9 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
       this.peerReadySeen = true;
     }
     this.evaluate();
-    if (pkt.words) {
-      if (this.writeGate) this.batcher.push(pkt.words);
+    // Only the linked player's rounds have a seat on the adapter's two-player link.
+    if (pkt.words && src === this.peerSeat) {
+      if (this.writeGate) this.writeRound(pkt.words);
       else if (this.peerReadySeen) this.pendingRounds.push(new Uint16Array(pkt.words));
       else this.droppedWhileClosed++;
     }
@@ -268,7 +255,6 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
 
   private onPeerLeft = ({ id }: { id: number }) => {
     this.peers.delete(id);
-    this.batcher.clear();
     this.pendingRounds.length = 0;
     if (this.mode === 'host' && this.relayActive) {
       void this.gracefulClose().then(() => this.evaluate());
@@ -302,7 +288,6 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
         if (this.mode === 'host') {
           // The real parent GBA sent 0x8FFF: gpsp masters drop every queued
           // peer packet at this transition (serial_proto.c:164-170).
-          this.batcher.clear();
           this.pendingRounds.length = 0;
           if (this.hostShouldRefuseLoneConnect()) {
             void this.gracefulClose();
@@ -477,6 +462,18 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     void this.adapter.connectLink().catch((e: Error) => this.emit('error', e));
   }
 
+  private writeRound(round: Round): void {
+    // An all-zero round is what the GBA gets anyway while nothing is queued for it.
+    if (isAllZero(round)) return;
+    if (hasReservedCommand(round)) {
+      this.emit('log', `dropped peer round with reserved status word 0x${round[0]!.toString(16)} in word 0`);
+      return;
+    }
+    void this.adapter
+      .writeRounds(this.peerSeat, [round])
+      .catch((e: Error) => this.emit('log', `fw write failed: ${e.message}`));
+  }
+
   private sendMpk1(state: number, words: Round | null): void {
     this.net.sendPacket(buildMpk1(state, words));
     this.txPackets++;
@@ -510,7 +507,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     if (this.writeGate) return;
     this.writeGate = true;
     const buffered = this.pendingRounds.length;
-    for (const round of this.pendingRounds) this.batcher.push(round);
+    for (const round of this.pendingRounds) this.writeRound(round);
     this.pendingRounds.length = 0;
     if (buffered > 0 || this.droppedWhileClosed > 0) {
       this.emit(
@@ -548,14 +545,11 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     // 0xFF06, and the peer's game hangs on the close until it sees them.
     const flushed = this.emitter.flushNow();
     if (flushed > 0) this.emit('log', `section reset: flushed ${flushed} tail round(s) to peer`);
-    this.batcher.clear();
-    this.pendingRounds.length = 0;
   }
 
   private teardownPumps(): void {
     this.emitter.disable();
     this.emitter.clear();
-    this.batcher.clear();
     this.pendingRounds.length = 0;
     this.writeGate = false;
   }
@@ -573,7 +567,6 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     }
     this.closing = true;
     this.writeGate = false;
-    this.batcher.clear();
     this.pendingRounds.length = 0;
     this.emitter.clear();
     this.setPhase('closing');
@@ -581,7 +574,7 @@ export class LinkBridge extends EventEmitter<LinkBridgeEvents> {
     let timedOut = false;
     try {
       while (Date.now() < deadline && this.relayActive && !this.stopped) {
-        await this.adapter.writeRounds(CLOSE_ROUND_BUF).catch(() => undefined);
+        await this.adapter.writeRounds(this.peerSeat, CLOSE_ROUNDS).catch(() => undefined);
         await delay(GRACEFUL_CLOSE_TICK_MS);
       }
       timedOut = this.relayActive;

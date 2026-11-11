@@ -7,11 +7,9 @@
 
 export const MAW1_MAGIC_BYTES = [0x4d, 0x41, 0x57, 0x31] as const;
 export const MAW1_HEADER_LEN = 8;
-/** Data-endpoint transfer size: the firmware chunks its MAW1 stream into 64-byte pieces. */
-export const AW_CHUNK_LEN = 64;
-/** gpsp dequeues with a u8 cursor that must reach cnt+1 for a PACKETXG entry, so a 255-word one replays forever. */
-export const MAW1_TX_MAX_CNT = 254;
-/** The wire field is 8 bits; inbound frames up to 255 words are still well-formed. */
+/** MAW1 stream bytes in one data-endpoint packet: the firmware's packets are 51 bytes, the first the sender's seat. */
+export const AW_CHUNK_LEN = 50;
+/** The wire field is 8 bits: a frame carries up to 255 words. */
 export const MAW1_RX_MAX_CNT = 255;
 
 export const CMD_NONE = 0x7fff;
@@ -97,7 +95,7 @@ export function isStateOnly(frame: Maw1Frame): boolean {
 }
 
 /**
- * Port of the firmware's Maw1StreamParser: frames span 64-byte chunks with zero-padded tails,
+ * Port of the firmware's Maw1StreamParser: frames span chunks with zero-padded tails,
  * and it resyncs on the magic, which zero padding can't match.
  */
 export class Maw1StreamParser {
@@ -160,7 +158,7 @@ export class Maw1StreamParser {
 }
 
 /**
- * Packs frames into the 64-byte writes the firmware's data OUT endpoint takes. Frames queued in one
+ * Packs frames into the 50-byte stream pieces of the firmware's data packets. Frames queued in one
  * tick share chunks; the last is zero-padded, which the firmware skips while seeking the magic.
  */
 export class Maw1Chunker {
@@ -169,7 +167,7 @@ export class Maw1Chunker {
   private scheduled = false;
 
   constructor(
-    private readonly write64: (chunk: Buffer) => void,
+    private readonly write: (chunk: Buffer) => void,
     private readonly schedule: (fn: () => void) => void = queueMicrotask,
   ) {}
 
@@ -195,7 +193,7 @@ export class Maw1Chunker {
     for (let off = 0; off < all.length; off += AW_CHUNK_LEN) {
       const chunk = Buffer.alloc(AW_CHUNK_LEN);
       all.copy(chunk, 0, off, Math.min(off + AW_CHUNK_LEN, all.length));
-      this.write64(chunk);
+      this.write(chunk);
     }
   }
 

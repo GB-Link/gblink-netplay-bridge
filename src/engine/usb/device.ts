@@ -1,8 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { usb, findByIds, getDeviceList, Device, Interface, InEndpoint, OutEndpoint } from 'usb';
+import { usb, getDeviceList, Device, Interface, InEndpoint, OutEndpoint } from 'usb';
 
-export const GBLINK_VID = 0x2fe3;
-export const GBLINK_PID = 0x000a;
+/** The adapter's USB IDs: 1209:b011 from firmware 3.0.0, 2fe3:000a before. */
+export const GBLINK_IDS: ReadonlyArray<{ vid: number; pid: number }> = [
+  { vid: 0x1209, pid: 0xb011 },
+  { vid: 0x2fe3, pid: 0x000a },
+];
 
 // Bulk endpoints on vendor interface 0. Interfaces 1/2 are CDC — never claim them.
 const EP_CMD_OUT = 0x01;
@@ -18,7 +21,7 @@ const REOPEN_AFTER_MS = 1000;
 export interface UsbTransportEvents {
   /** Raw status endpoint (0x81) payload: consecutive 2-byte LE words. */
   'status-bytes': [Buffer];
-  /** Raw data endpoint (0x82) payload: 64 B rounds or shorter command replies. */
+  /** Raw data endpoint (0x82) payload: the mode's link data or a command reply. */
   'data-bytes': [Buffer];
   attached: [];
   detached: [];
@@ -36,8 +39,10 @@ export interface ILinkTransport extends EventEmitter<UsbTransportEvents> {
 
 const hex = (value: number, digits: number): string => value.toString(16).padStart(digits, '0');
 
-const isGBLink = (device: Device): boolean =>
-  device.deviceDescriptor.idVendor === GBLINK_VID && device.deviceDescriptor.idProduct === GBLINK_PID;
+export const isGBLink = (device: Device): boolean =>
+  GBLINK_IDS.some(
+    (id) => device.deviceDescriptor.idVendor === id.vid && device.deviceDescriptor.idProduct === id.pid,
+  );
 
 export class UsbTransport extends EventEmitter<UsbTransportEvents> implements ILinkTransport {
   private device: Device | null = null;
@@ -86,7 +91,7 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
   }
 
   static find(): Device | undefined {
-    return findByIds(GBLINK_VID, GBLINK_PID);
+    return UsbTransport.list()[0];
   }
 
   async open(device?: Device): Promise<void> {
@@ -94,7 +99,7 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
     this.closed = false;
     const dev = device ?? UsbTransport.find();
     if (!dev) {
-      throw new Error(`GBLink device ${hex(GBLINK_VID, 4)}:${hex(GBLINK_PID, 4)} not found`);
+      throw new Error('GBLink device not found');
     }
     // Annotate which step failed: opening fails when no usable driver is
     // bound (Windows without WinUSB), claiming fails when another program
@@ -136,8 +141,8 @@ export class UsbTransport extends EventEmitter<UsbTransportEvents> implements IL
   }
 
   sendData(buf: Buffer): Promise<void> {
-    if (buf.length !== 64) {
-      return Promise.reject(new Error(`data OUT endpoint takes exactly 64 bytes, got ${buf.length}`));
+    if (buf.length === 0 || buf.length > 64) {
+      return Promise.reject(new Error(`data OUT endpoint takes 1 to 64 bytes, got ${buf.length}`));
     }
     return this.enqueue('data', buf);
   }

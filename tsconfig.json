@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/engine/**/*", "src/cli.ts"]
+  "include": ["src/engine/**/*", "src/shared/**/*", "src/cli.ts"]
 }

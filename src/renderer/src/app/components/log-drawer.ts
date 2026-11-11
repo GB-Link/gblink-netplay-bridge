@@ -8,6 +8,7 @@ type Level = (typeof LEVELS)[number];
 @Component({
   selector: 'app-log-drawer',
   imports: [DatePipe],
+  host: { '(window:backbutton)': 'closeOnBack($event)' },
   template: `
     <footer
       class="shrink-0 border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"
@@ -85,6 +86,12 @@ export class LogDrawer {
   protected readonly bridge = inject(BridgeService);
   protected readonly levels = LEVELS;
   protected readonly open = signal(false);
+
+  protected closeOnBack(event: Event): void {
+    if (event.defaultPrevented || !this.open()) return;
+    this.open.set(false);
+    event.preventDefault();
+  }
   protected readonly copied = signal(false);
   protected readonly enabledLevels = signal<Set<Level>>(new Set(LEVELS));
 

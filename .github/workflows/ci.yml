@@ -17,6 +17,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run typecheck:main
+      - run: npm run typecheck:android
       - name: Install renderer deps
         run: npm ci
         working-directory: src/renderer

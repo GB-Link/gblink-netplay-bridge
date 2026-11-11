@@ -98,7 +98,7 @@ export class GBLinkRfuDevice extends EventEmitter<RfuDeviceEvents> implements IR
       this.emit('log', `firmware ${firmwareLabel(fw)}`);
       this.resetTelemetry();
       this.parser.reset();
-      await this.adapter.initLinkMode('master', 'rfu');
+      await this.adapter.initLinkMode('rfu');
       this.reinitAttempts = 0;
       this.ready = true;
       this.emit('ready');

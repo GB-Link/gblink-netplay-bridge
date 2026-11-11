@@ -9,8 +9,16 @@ const INSTALLED_PATHS = [
   `/usr/lib/udev/rules.d/${RULE_FILE}`,
 ];
 
+/** True without a rule, or with one from before the adapter's IDs changed (firmware 3.0.0). */
 export function needsUdevRule(): boolean {
-  return process.platform === 'linux' && !INSTALLED_PATHS.some((p) => fs.existsSync(p));
+  if (process.platform !== 'linux') return false;
+  return !INSTALLED_PATHS.some((p) => {
+    try {
+      return fs.readFileSync(p, 'utf8').includes('b011');
+    } catch {
+      return false;
+    }
+  });
 }
 
 function bundledRulePath(): string {

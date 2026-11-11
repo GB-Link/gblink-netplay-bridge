@@ -8,7 +8,6 @@ import {
   type JoinDirectRequest,
   type JoinRelayRequest,
 } from '../shared/ipc';
-import type { CableSelection } from '../engine/types';
 import { EngineHost } from './engine-host';
 import { scanLan } from './lan-discovery';
 import { fetchRooms } from './lobby';
@@ -67,7 +66,6 @@ function main(): void {
     ipcMain.handle(IPC.setSettings, (_e, patch: Partial<AppSettings>) => settings.update(patch));
     ipcMain.handle(IPC.resetSettings, () => settings.reset());
     ipcMain.handle(IPC.installUdevRule, () => installUdevRule());
-    ipcMain.handle(IPC.setCableSelection, (_e, sel: CableSelection) => host.setCableSelection(sel));
     ipcMain.handle(IPC.openExternal, async (_e, url: string) => {
       const parsed = new URL(url);
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {

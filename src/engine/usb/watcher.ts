@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { usb, type Device } from 'usb';
-import { GBLINK_PID, GBLINK_VID, UsbTransport } from './device';
+import { isGBLink, UsbTransport } from './device';
 import { GBLinkAdapter } from './adapter';
 import type { FirmwareVersion } from '../types';
 
@@ -9,9 +9,6 @@ export interface DeviceWatcherEvents {
   /** Per-attempt diagnostics while trying to open a freshly seen adapter. */
   log: [string];
 }
-
-const isGBLink = (d: Device): boolean =>
-  d.deviceDescriptor.idVendor === GBLINK_VID && d.deviceDescriptor.idProduct === GBLINK_PID;
 
 /**
  * Delays before each probe attempt after the device appears. A freshly

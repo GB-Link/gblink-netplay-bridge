@@ -1,7 +1,7 @@
 import { Component, inject, output, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { BridgeService, UDEV_RULE_PATH, UDEV_RULE_TEXT } from '../services/bridge.service';
-import { cableSelectionText, cableTypeText, deviceStateText, firmwareText } from '../copy/state-copy';
+import { deviceStateText, firmwareText } from '../copy/state-copy';
 
 @Component({
   selector: 'app-device-drawer',
@@ -30,8 +30,6 @@ import { cableSelectionText, cableTypeText, deviceStateText, firmwareText } from
             <div class="text-base font-medium">{{ stateText() }}</div>
             <div class="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm text-neutral-600 dark:text-neutral-400">
               <span>Firmware: {{ fwText() }}</span>
-              <span>Cable: {{ selectionText() }}</span>
-              <span>Sampled: {{ cableText() }}</span>
             </div>
           </section>
 
@@ -107,6 +105,12 @@ import { cableSelectionText, cableTypeText, deviceStateText, firmwareText } from
                       old descriptors. Open Device Manager, uninstall “GBLink USB”
                       (tick “delete the driver software” if offered), then replug.</li>
                 </ul>
+              } @else if (isAndroid()) {
+                <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-700 dark:text-amber-300">
+                  <li>Unplug the adapter, plug it back in, and allow access when Android asks.</li>
+                  <li>Close anything else using the adapter — a browser tab with a
+                      GB-Link web app keeps exclusive hold of it.</li>
+                </ul>
               } @else {
                 <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-700 dark:text-amber-300">
                   <li>Close anything else using the adapter — a browser tab with a
@@ -162,6 +166,10 @@ export class DeviceDrawer {
   protected isWindows(): boolean {
     return this.bridge.platform === 'win32';
   }
+
+  protected isAndroid(): boolean {
+    return this.bridge.platform === 'android';
+  }
   protected readonly installResult = signal<{ ok: boolean; detail?: string } | null>(null);
 
   readonly closed = output<void>();
@@ -191,14 +199,8 @@ export class DeviceDrawer {
     }
   }
 
-  protected selectionText(): string {
-    return cableSelectionText(this.bridge.firmware()?.cableSelection);
-  }
   protected fwText(): string {
     return firmwareText(this.bridge.firmware());
-  }
-  protected cableText(): string {
-    return cableTypeText(this.bridge.cableType());
   }
 
   protected async copyRule(): Promise<void> {

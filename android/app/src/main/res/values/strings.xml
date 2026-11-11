@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GBLink Netplay Bridge</string>
+    <string name="title_activity_main">GBLink Netplay</string>
+    <string name="package_name">com.gblink.bridge</string>
+    <string name="custom_url_scheme">com.gblink.bridge</string>
+</resources>

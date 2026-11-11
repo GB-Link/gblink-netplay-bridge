@@ -3,15 +3,13 @@ import {
   FwStatus,
   firmwareLabel,
   fwAtLeast,
-  type AdapterRole,
-  type AwStats,
-  type AwTimingOverride,
   type BridgeCounters,
   type FirmwareVersion,
   type IGBLinkAdapter,
   type INetplayEndpoint,
   type LinkPhase,
   type NetplayPeer,
+  type PlayerSettings,
 } from '../types';
 import { MAX_REINIT_ATTEMPTS, REINIT_DELAY_MS, SELF_CLOSE_GRACE_MS, type BridgeMode } from '../bridge/linkBridge';
 import { identifyPacket, mismatchWarning } from '../netplay/protocolMagic';
@@ -20,7 +18,6 @@ import {
   AW_SYNC_WORD,
   AwState,
   CMD_NONE,
-  MAW1_TX_MAX_CNT,
   Maw1Chunker,
   Maw1StreamParser,
   isStateOnly,
@@ -32,13 +29,14 @@ import {
   type AwVariant,
   type Maw1Frame,
 } from './maw1';
+import { PeerKeys } from './peerKeys';
 import { PhaseGate } from './phaseGate';
 
 export type { BridgeMode } from '../bridge/linkBridge';
 
-/** The Advance Wars proxy (2.2.0) plus the persistent cable selection (2.2.3). */
-const AW_MIN_FW = { major: 2, minor: 2, patch: 3 };
-/** Role command sent but no 0xFF03: the firmware is stuck, re-enter the mode. */
+/** The first firmware with seats in the mode's commands and data packets. */
+const AW_MIN_FW = { major: 3, minor: 0, patch: 0 };
+/** Player settings sent but no 0xFF03: the firmware is stuck, re-enter the mode. */
 const ARM_TIMEOUT_MS = 3000;
 /** 0x12 sent but no 0xFF05. */
 const START_TIMEOUT_MS = 3000;
@@ -49,21 +47,14 @@ const SILENT_PEER_MS = 15000;
 const REJECT_LOG_MAX = 5;
 
 export interface AwBridgeOptions {
-  /** GetAwStats polling period; 0 disables. */
-  statsPollMs?: number;
   /** Suppression window for repeated state-only frames toward the firmware. */
   dedupWindowMs?: number;
-  /** Master-mode round pacing override, forwarded in SetMode. */
-  awTiming?: AwTimingOverride;
   now?: () => number;
 }
 
 export interface AwLinkBridgeEvents {
   'link-phase': [LinkPhase, number?];
   counters: [BridgeCounters];
-  /** Cable type sampled by the firmware at mode entry (0 GBA, 1 GBC/none). */
-  cable: [number];
-  'aw-stats': [AwStats];
   log: [string];
   warn: [string];
   error: [Error];
@@ -81,19 +72,20 @@ interface MutableCounters {
 }
 
 /**
- * Advance Wars bridge between firmware mode 0x04 (the serialaw proxy) and MAW1 netpackets from gpsp peers.
+ * Advance Wars bridge between firmware mode 0x04 (the link proxy) and MAW1 netpackets from gpsp peers.
+ * The proxy's frames are gpsp's, apart from the key presses PeerKeys puts in gpsp's terms.
  *
  * The proxy is armed without waiting for a peer, so the GBA always sees an idle partner, as a gpsp game does.
  * One SetMode and StartHandshake serve every match of a session; the section restarts only when the peer
  * leaves, the session closes or the firmware closes the mode.
  */
 export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
-  private readonly statsPollMs: number;
   private readonly dedupWindowMs: number;
   private readonly now: () => number;
 
   private readonly parser = new Maw1StreamParser((f) => this.onFwFrame(f));
   private readonly chunker = new Maw1Chunker((chunk) => this.writeChunk(chunk));
+  private readonly peerKeys = new PeerKeys();
   private readonly gate: PhaseGate;
 
   private phase: LinkPhase = 'idle';
@@ -111,8 +103,6 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
 
   private selfCancelAt = 0;
   private reinitAttempts = 0;
-  /** GetAwStats timed out: the firmware predates the counters. */
-  private statsUnsupported = false;
 
   private readonly pendingInbound: Buffer[] = [];
   private lastInState: number | null = null;
@@ -140,7 +130,6 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
   private startTimer: NodeJS.Timeout | null = null;
   private reinitTimer: NodeJS.Timeout | null = null;
   private countersTimer: NodeJS.Timeout | null = null;
-  private statsTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly adapter: IGBLinkAdapter,
@@ -150,9 +139,7 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
     opts: AwBridgeOptions = {},
   ) {
     super();
-    this.statsPollMs = opts.statsPollMs ?? 2000;
     this.dedupWindowMs = opts.dedupWindowMs ?? 100;
-    this.awTiming = opts.awTiming;
     this.now = opts.now ?? Date.now;
     this.gate = new PhaseGate(mode, variant, {
       now: () => this.now(),
@@ -162,11 +149,9 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
     });
   }
 
-  private readonly awTiming: AwTimingOverride | undefined;
-
-  get role(): AdapterRole {
-    // gpsp makes netplay client 0 the MULTI parent: hosting, the GBA is the parent (adapter slave); joining, child 1.
-    return this.mode === 'join' ? 'master' : 'slave';
+  get players(): PlayerSettings {
+    // gpsp makes netplay client 0 the MULTI parent, so client ids are seats: hosting, the GBA is the parent; joining, child 1.
+    return { playerCount: 2, seat: this.mode === 'join' ? 1 : 0 };
   }
 
   get expectedPeerId(): number {
@@ -241,20 +226,12 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
       this.firmware = fw;
       if (!fwAtLeast(fw, AW_MIN_FW.major, AW_MIN_FW.minor, AW_MIN_FW.patch)) {
         throw new Error(
-          `GB-Link firmware ${firmwareLabel(fw)} is too old — Advance Wars needs 2.2.3 or newer (update the adapter from the GBLink launcher)`,
+          `GB-Link firmware ${firmwareLabel(fw)} is too old — Advance Wars needs 3.0.0 or newer (update the adapter from the GBLink launcher)`,
         );
       }
       this.emit('log', `firmware ${firmwareLabel(fw)}`);
-      if (fw.cableSelection && fw.cableSelection !== 'auto') {
-        this.emit('log', `link cable pinned on the adapter: ${fw.cableSelection.toUpperCase()}`);
-      }
-      await this.adapter.initLinkMode(this.role, this.variant, this.awTiming);
-      const cable = await this.adapter.getCableType().catch(() => -1);
-      if (cable >= 0) {
-        this.emit('cable', cable);
-        this.emit('log', `cable type ${cable}`);
-      }
-      // 0xFF03 can arrive while getCableType is in flight.
+      await this.adapter.initLinkMode(this.variant, this.players);
+      // 0xFF03 can arrive before the player settings write resolves.
       if (!this.sectionLive && !this.stopped) {
         this.armTimer = setTimeout(() => {
           this.armTimer = null;
@@ -323,9 +300,9 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
     this.variantWarned = { out: false, in: false };
     this.parser.reset();
     this.chunker.clear();
+    this.peerKeys.reset();
     this.clearTimer('armTimer');
     this.clearTimer('startTimer');
-    this.stopStats();
     this.gate.reset();
   }
 
@@ -365,7 +342,6 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
           if (buffered.length > 0) {
             this.emit('log', `delivered ${buffered.length} buffered peer frame(s) to the proxy`);
           }
-          this.startStats();
         }
         this.setPhase('linked', status);
         break;
@@ -404,21 +380,17 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
   };
 
   private onFwFrame(frame: Maw1Frame): void {
-    if (frame.cnt > MAW1_TX_MAX_CNT && frame.state === AwState.PacketXg) {
-      // A 255-word PACKETXG would hang the peer (MAW1_TX_MAX_CNT); INTERSYNC bursts that size are fine.
-      this.counters.rejected++;
-      this.logReject(`dropped outbound frame with cnt ${frame.cnt}`);
-      return;
-    }
     this.sniffVariant(frame, 'out');
     if (!this.sessionLive || !this.net.playingPeers.has(this.expectedPeerId)) {
       // Dropped, as a gpsp with no connections would.
       this.counters.txNoPeer++;
       return;
     }
-    const packet = serializeFrame(frame);
     if (frame.state === AwState.PacketXg && frame.cnt >= 2) this.noteLobbyPacket();
-    if (this.gate.pass(frame, packet)) this.transmit(packet);
+    for (const out of this.peerKeys.toPeer(frame)) {
+      const packet = serializeFrame(out);
+      if (this.gate.pass(out, packet)) this.transmit(packet);
+    }
   }
 
   private transmit(packet: Buffer): void {
@@ -464,7 +436,7 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
 
   private writeChunk(chunk: Buffer): void {
     void this.adapter
-      .writeAwChunk(chunk)
+      .writeAwChunk(this.expectedPeerId, chunk)
       .catch((e: Error) => this.emit('log', `fw write failed: ${e.message}`));
   }
 
@@ -483,7 +455,7 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
         this.ignoredPeers.add(peer.id);
         this.emit(
           'warn',
-          `player ${peer.id} (${peer.nick}) joined — Advance Wars over GB-Link is 2-player only; ignoring them`,
+          `player ${peer.id} (${peer.nick}) joined — the bridge's Advance Wars link is 2-player only; ignoring them`,
         );
       }
       return;
@@ -592,32 +564,6 @@ export class AwLinkBridge extends EventEmitter<AwLinkBridgeEvents> {
         `the other player seems to be running ${other} (or their gpsp_serial core option is set to the wrong mode)`,
       );
     }
-  }
-
-  private startStats(): void {
-    if (this.statsTimer || this.statsPollMs <= 0 || this.statsUnsupported) return;
-    this.statsTimer = setInterval(() => {
-      this.adapter
-        .getAwStats()
-        .then((s) => this.emit('aw-stats', s))
-        .catch((e: Error) => {
-          if ((e as Error).name === 'AdapterTimeoutError') {
-            this.statsUnsupported = true;
-            this.emit('log', 'this firmware has no Advance Wars counters (GetAwStats); not asking again');
-          } else {
-            this.emit('log', `aw-stats polling stopped: ${e.message}`);
-          }
-          this.stopStats();
-        });
-    }, this.statsPollMs);
-    this.statsTimer.unref?.();
-  }
-
-
-
-  private stopStats(): void {
-    if (this.statsTimer) clearInterval(this.statsTimer);
-    this.statsTimer = null;
   }
 
   private logReject(msg: string): void {

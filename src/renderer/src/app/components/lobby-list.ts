@@ -9,6 +9,7 @@ import { badgeForRoom, gameForRoom } from '../../../../shared/games';
 @Component({
   selector: 'app-lobby-list',
   imports: [FormsModule],
+  host: { '(window:backbutton)': 'closeOnBack($event)' },
   template: `
     <div class="mb-2 flex flex-wrap items-center gap-2">
       <h2 class="text-sm font-semibold text-neutral-500 dark:text-neutral-400">Public lobby</h2>
@@ -50,18 +51,18 @@ import { badgeForRoom, gameForRoom } from '../../../../shared/games';
           class="border-b border-neutral-200 text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800"
         >
           <tr>
-            <th class="px-3 py-2">Game</th>
-            <th class="px-3 py-2">Host</th>
-            <th class="px-3 py-2">Route</th>
-            <th class="px-3 py-2">Players</th>
+            <th class="px-3 py-2 max-sm:px-2">Game</th>
+            <th class="px-3 py-2 max-sm:px-2">Host</th>
+            <th class="px-3 py-2 max-sm:hidden">Route</th>
+            <th class="px-3 py-2 max-sm:hidden">Players</th>
             <th class="px-1 py-2"></th>
-            <th class="px-3 py-2"></th>
+            <th class="px-3 py-2 max-sm:px-2"></th>
           </tr>
         </thead>
         <tbody>
           @for (room of filteredRooms(); track room.ip + room.port + room.username) {
             <tr class="border-b border-neutral-100 last:border-0 dark:border-neutral-800">
-              <td class="px-3 py-2" [title]="'CRC32 ' + crcHex(room)">
+              <td class="px-3 py-2 max-sm:px-2 max-sm:[overflow-wrap:anywhere]" [title]="'CRC32 ' + crcHex(room)">
                 {{ room.gameName }}
                 @if (badgeFor(room); as badge) {
                   <span
@@ -72,14 +73,15 @@ import { badgeForRoom, gameForRoom } from '../../../../shared/games';
                   {{ room.coreName }} {{ room.coreVersion }}
                 </span>
               </td>
-              <td class="px-3 py-2">
+              <td class="px-3 py-2 max-sm:px-2 max-sm:[overflow-wrap:anywhere]">
                 {{ room.username }}
                 <span class="text-xs text-neutral-400">{{ room.country }}</span>
+                <span class="block text-xs text-neutral-400 sm:hidden">
+                  {{ routeText(room) }} · {{ room.playerCount }} {{ room.playerCount === 1 ? 'player' : 'players' }}
+                </span>
               </td>
-              <td class="px-3 py-2">
-                {{ room.lan ? 'LAN' : room.hostMethod === 3 ? 'Relay' : 'Direct' }}
-              </td>
-              <td class="px-3 py-2 tabular-nums">{{ room.playerCount }}</td>
+              <td class="px-3 py-2 max-sm:hidden">{{ routeText(room) }}</td>
+              <td class="px-3 py-2 tabular-nums max-sm:hidden">{{ room.playerCount }}</td>
               <td class="px-1 py-2">
                 @if (room.hasPassword) {
                   <svg
@@ -94,7 +96,7 @@ import { badgeForRoom, gameForRoom } from '../../../../shared/games';
                   </svg>
                 }
               </td>
-              <td class="px-3 py-2 text-right">
+              <td class="px-3 py-2 text-right max-sm:px-2">
                 <button
                   (click)="joinClicked(room)"
                   [disabled]="!room.joinable || bridge.sessionActive() || relayRefused(room)"
@@ -156,6 +158,12 @@ export class LobbyList {
   protected readonly pendingRoom = signal<LobbyRoom | null>(null);
   protected modalPassword = '';
 
+  protected closeOnBack(event: Event): void {
+    if (event.defaultPrevented || !this.pendingRoom()) return;
+    this.pendingRoom.set(null);
+    event.preventDefault();
+  }
+
   protected readonly filteredRooms = computed(() => {
     const q = this.search().trim().toLowerCase();
     return this.rooms().filter((r) => {
@@ -216,6 +224,10 @@ export class LobbyList {
     } catch (e) {
       this.bridge.reportActionError(e);
     }
+  }
+
+  protected routeText(room: LobbyRoom): string {
+    return room.lan ? 'LAN' : room.hostMethod === 3 ? 'Relay' : 'Direct';
   }
 
   protected badgeFor(room: LobbyRoom): string | null {

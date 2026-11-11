@@ -4,7 +4,7 @@ import type { EventEmitter } from 'node:events';
 export enum FwStatus {
   GameboyConnected = 0xff00,
   GameboyDisconnected = 0xff01,
-  AwaitMode = 0xff02,
+  AwaitPlayerSettings = 0xff02,
   HandshakeReceived = 0xff03,
   HandshakeFinished = 0xff04,
   LinkConnected = 0xff05,
@@ -14,11 +14,14 @@ export enum FwStatus {
 }
 
 /**
- * Adapter link role. 'master' = adapter drives SC, the real GBA becomes the
- * MULTI child (bridge joins netplay). 'slave' = the real GBA is the MULTI
- * parent and drives the clock (bridge hosts netplay).
+ * SetPlayerSettings for the cable modes: how many players the link has (2 to 4) and the
+ * GBA's seat among them. Seat 0 is the MULTI parent, which drives the clock (bridge hosts
+ * netplay); in any other seat the adapter drives it and the GBA is a child (bridge joins).
  */
-export type AdapterRole = 'master' | 'slave';
+export interface PlayerSettings {
+  playerCount: number;
+  seat: number;
+}
 
 /** Link protocol: Pokémon gen 3 by cable (gpsp MPK1), the Wireless Adapter (RFU1), Advance Wars 1/2 (MAW1). */
 export type LinkGame = 'gen3' | 'rfu' | 'aw1' | 'aw2';
@@ -29,23 +32,6 @@ export type Console = 'gba' | 'switch';
 /** The group a bridge leads for the Switch when it joins a cable session as the child. */
 export type SwitchRoom = 'trade' | 'single' | 'double';
 
-/** Stored on the adapter (firmware 2.2.3+) as every mode's SD-pin default; 'auto' leaves detection alone. */
-export type CableSelection = 'auto' | 'gba' | 'gbc';
-
-/** Wire values of the firmware's SetCableSelection (0x4b) / GetFirmwareInfo byte 5. */
-export const CABLE_SELECTION_VALUE: Record<CableSelection, number> = {
-  auto: 0,
-  gba: 1,
-  gbc: 2,
-};
-
-export function cableSelectionFromValue(value: number): CableSelection | undefined {
-  for (const [name, v] of Object.entries(CABLE_SELECTION_VALUE)) {
-    if (v === value) return name as CableSelection;
-  }
-  return undefined;
-}
-
 export interface FirmwareVersion {
   major: number;
   minor: number;
@@ -54,8 +40,6 @@ export interface FirmwareVersion {
   device?: 'gblink' | 'esp32';
   /** GetFirmwareInfo byte 4 (firmware 2.2.1+). */
   landingPage?: boolean;
-  /** GetFirmwareInfo byte 5 (firmware 2.2.3+). */
-  cableSelection?: CableSelection;
 }
 
 export function fwAtLeast(fw: FirmwareVersion, major: number, minor: number, patch: number): boolean {
@@ -76,43 +60,8 @@ export function parseFirmwareVersion(text: string, device?: 'gblink' | 'esp32'):
   return fw;
 }
 
-/**
- * Advance Wars master-mode round period in µs (SetMode bytes 3-6). Firmware up to 2.2.7
- * ignores it; only a build with the proxy's tuning support honours it.
- */
-export interface AwTimingOverride {
-  pxgUs?: number;
-  syncUs?: number;
-}
-
 /** One 8-word GBA MULTI command round (u16 values, index 0 = LINKCMD word). */
 export type Round = Uint16Array;
-
-/** Counters reported by the firmware's GetAwStats (0x14) reply, format v1. */
-export interface AwStats {
-  rounds: number;
-  txFrames: number;
-  txSuppressed: number;
-  txDropOversize: number;
-  txDropRingFull: number;
-  rxFrames: number;
-  rxDropQueueFull: number;
-  fallbackEcho: number;
-  resets: number;
-  txChunkRetries: number;
-  usbDataStalls: number;
-  maxRoundGapMs: number;
-  rqHighWater: number;
-  rqCount: number;
-  state: number;
-  pstate: number;
-  remoteState: number;
-  /** 1 = attached GBA is the bus master (adapter in SLAVE link mode). */
-  role: number;
-  variant: number;
-  pxgPeriodUs: number;
-  syncPeriodUs: number;
-}
 
 export interface BridgeCounters {
   txPackets: number;
@@ -127,16 +76,16 @@ export interface BridgeCounters {
 export interface AdapterEvents {
   /** Firmware status word from the status endpoint. */
   status: [FwStatus];
-  /** One 8-word round received from the real GBA (64 B data IN split in 4). */
+  /** One 8-word round received from the real GBA (a data IN packet carries three). */
   round: [Round];
-  /** One 64-byte chunk of the firmware's MAW1 byte stream (Advance Wars mode). */
+  /** The 50 bytes of the firmware's MAW1 byte stream in one data IN packet (Advance Wars mode). */
   'aw-chunk': [Buffer];
   /** One 64-byte chunk of the firmware's RFU1 byte stream (wireless adapter mode). */
   'rfu-chunk': [Buffer];
   log: [string];
   /** A condition the player can act on (raised by the Switch's stand-in adapter). */
   warn: [string];
-  /** Non-64-byte data-endpoint payloads (firmware info, cable type replies). */
+  /** Data-endpoint payloads that are not the mode's link data (firmware info and other command replies). */
   'data-raw': [Buffer];
   attached: [];
   detached: [];
@@ -151,28 +100,26 @@ export interface IGBLinkAdapter extends EventEmitter<AdapterEvents> {
   readonly emulated?: boolean;
   /** Find the device, claim interface 0, start the IN transfer loops. */
   start(): Promise<void>;
-  /** Cancel -> 500 ms -> SetMode(game) -> DeviceReady -> AwaitMode -> role (none for wireless). */
-  initLinkMode(role: AdapterRole, game?: LinkGame, awTiming?: AwTimingOverride): Promise<void>;
+  /**
+   * Cancel -> 500 ms -> SetMode(game) -> DeviceReady -> AwaitPlayerSettings -> SetPlayerSettings.
+   * The wireless mode takes no player settings; the cable modes need them.
+   */
+  initLinkMode(game: LinkGame, players?: PlayerSettings): Promise<void>;
   /** 0x12 — only legal after HandshakeReceived (0xFF03) for the live section. */
   startHandshake(): Promise<void>;
-  /** 0x13 — gen3 master role only; makes the adapter transmit 0x8FFF. */
+  /** 0x13 — gen3, a child GBA only; makes the adapter transmit 0x8FFF. */
   connectLink(): Promise<void>;
   /** 0x01 — abort the running mode. */
   cancel(): Promise<void>;
-  /** 0x4b — persist the link-cable selection on the adapter and apply it now. */
-  setCableSelection(selection: CableSelection): Promise<void>;
-  /** Write exactly 64 bytes (4 rounds x 8 u16 LE) to the data OUT endpoint. */
-  writeRounds(buf: Buffer): Promise<void>;
-  /** Write exactly 64 bytes of MAW1 stream to the data OUT endpoint. */
-  writeAwChunk(buf: Buffer): Promise<void>;
+  /** Write up to 3 rounds of the player in `seat` to the data OUT endpoint. */
+  writeRounds(seat: number, rounds: Round[]): Promise<void>;
+  /** Write exactly 50 bytes of the MAW1 stream of the player in `seat` to the data OUT endpoint. */
+  writeAwChunk(seat: number, stream: Buffer): Promise<void>;
   /** Write exactly 64 bytes of RFU1 stream to the data OUT endpoint. */
   writeRfuChunk(buf: Buffer): Promise<void>;
   /** 0x4C answered: the firmware carries the wireless adapter mode. */
   probeWireless(): Promise<boolean>;
   getFirmwareInfo(): Promise<FirmwareVersion>;
-  getCableType(): Promise<number>;
-  /** 0x14 — Advance Wars proxy counters (only firmware built with them answers). */
-  getAwStats(): Promise<AwStats>;
   stop(): Promise<void>;
 }
 
@@ -285,14 +232,11 @@ export interface PumpTimings {
   dataEmitMs?: number;
   /** Idle interval after which a status-only MPK1 is sent. */
   statusCadenceMs?: number;
-  /** Partial-batch flush timer for netplay->firmware rounds. */
-  batchFlushMs?: number;
 }
 
 export const DEFAULT_PUMP_TIMINGS: Required<PumpTimings> = {
   dataEmitMs: 15,
   statusCadenceMs: 17,
-  batchFlushMs: 66,
 };
 
 /**

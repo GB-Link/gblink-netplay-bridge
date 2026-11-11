@@ -1,10 +1,7 @@
 import { EventEmitter } from 'node:events';
 import {
   FwStatus,
-  type AwStats,
-  type AwTimingOverride,
   type BridgeCounters,
-  type CableSelection,
   type CloseReason,
   type Console,
   type FirmwareVersion,
@@ -33,7 +30,6 @@ export * from './types';
 export * from './aw/maw1';
 export * from './rfu/rfu1';
 export type { IRfuDevice, RfuDeviceEvents, RfuDeviceInfo, RfuDeviceNotice } from './rfu/rfuDevice';
-export { decodeAwStats, encodeAwStats, formatAwStats } from './aw/awStats';
 export { NetplayClient } from './netplay/client';
 export { NetplayHost } from './netplay/host';
 export { LinkBridge } from './bridge/linkBridge';
@@ -62,8 +58,6 @@ export type EngineStartOptions = {
   switchRoom?: SwitchRoom;
   /** Switch: show each side's game as the other's kind so the games link across versions. */
   nationalBypass?: boolean;
-  /** Advance Wars master-mode round pacing; set only from the CLI. */
-  awTiming?: AwTimingOverride;
 } & (({ mode: 'join' } & NetplayJoinOptions) | ({ mode: 'host' } & NetplayHostOptions));
 
 export type SessionPhase =
@@ -85,12 +79,10 @@ export interface EngineEvents {
   /** The ESP32 bridge board of a Switch session. */
   esp32: [{ state: 'absent' | 'present' | 'error'; info?: RfuDeviceInfo; detail?: string }];
   'fw-status': [FwStatus];
-  'cable-type': [number];
   'link-phase': [LinkPhase, number?];
   session: [{ phase: SessionPhase; localClientId?: number; closeReason?: CloseReason; detail?: string }];
   peers: [NetplayPeer[]];
   counters: [BridgeCounters];
-  'aw-stats': [AwStats];
   /** Wireless: the room the device joined (host's nick), or null when it left. */
   room: [string | null];
   'host-ready': [{ extPort: number; relaySessionId?: string }];
@@ -174,7 +166,7 @@ export class GBLinkEngine extends EventEmitter<EngineEvents> {
         const device = new GBLinkRfuDevice(adapter);
         this.rfuDevice = device;
         bridge = new RfuLinkBridge(device, endpoint);
-      } else bridge = new AwLinkBridge(adapter, endpoint, opts.mode, game, { awTiming: opts.awTiming });
+      } else bridge = new AwLinkBridge(adapter, endpoint, opts.mode, game);
       this.wireBridge(bridge);
       deviceUp = await adapter
         .start()
@@ -234,17 +226,8 @@ export class GBLinkEngine extends EventEmitter<EngineEvents> {
     bridge.on('counters', (c) => this.emit('counters', c));
     bridge.on('log', (msg) => this.emit('log', msg));
     bridge.on('error', (e) => this.emit('error', e));
-    if (bridge instanceof LinkBridge) {
-      bridge.on('cable', (cable) => this.emit('cable-type', cable));
-      bridge.on('warn', (msg) => this.emit('warn', msg));
-    } else if (bridge instanceof AwLinkBridge) {
-      bridge.on('cable', (cable) => this.emit('cable-type', cable));
-      bridge.on('warn', (msg) => this.emit('warn', msg));
-      bridge.on('aw-stats', (s) => this.emit('aw-stats', s));
-    } else {
-      bridge.on('warn', (msg) => this.emit('warn', msg));
-      bridge.on('room', (nick) => this.emit('room', nick));
-    }
+    bridge.on('warn', (msg) => this.emit('warn', msg));
+    if (bridge instanceof RfuLinkBridge) bridge.on('room', (nick) => this.emit('room', nick));
   }
 
   async stop(): Promise<void> {
@@ -259,24 +242,6 @@ export class GBLinkEngine extends EventEmitter<EngineEvents> {
     this.adapter = null;
     this.rfuDevice = null;
     this.emit('session', { phase: 'closed', closeReason: 'graceful' });
-  }
-
-  /**
-   * Persist the link-cable selection on the adapter (0x4b) and report the
-   * refreshed firmware info. Refused while a session holds the device.
-   */
-  async setCableSelection(selection: CableSelection): Promise<FirmwareVersion> {
-    if (this.running) throw new Error('stop the session before changing the link cable selection');
-    const adapter = this.adapterFactory();
-    try {
-      await adapter.start();
-      await adapter.setCableSelection(selection);
-      const firmware = await adapter.getFirmwareInfo();
-      this.emit('device', { state: 'present', firmware });
-      return firmware;
-    } finally {
-      await adapter.stop().catch(() => undefined);
-    }
   }
 
   private emitPeers(): void {

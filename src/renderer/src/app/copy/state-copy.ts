@@ -1,4 +1,4 @@
-import type { CableSelection, CloseReason, Console, LinkGame, LinkPhase } from '../../../../engine/types';
+import type { CloseReason, Console, LinkGame, LinkPhase } from '../../../../engine/types';
 import type { DeviceStateName, SessionPhase } from '../../../../shared/ipc';
 
 const DEVICE_STATE_COPY: Record<DeviceStateName, string> = {
@@ -228,30 +228,6 @@ export function closeReasonText(reason: string): string {
   return lookup(CLOSE_REASON_COPY, reason);
 }
 
-// Firmware enum CableType: GBA = 0, GBC = 1 (linkLayer.h). The firmware only
-// samples the pin at link-mode entry, so the value exists per session; a
-// floating (unplugged) cable pin reads the same as GBC. Either cable works
-// for GBA cable link — detection just selects which pin carries SD.
-export function cableTypeText(cableType: number | null): string {
-  if (cableType === null) return 'detected when the link starts';
-  if (cableType === 0) return 'GBA cable';
-  if (cableType === 1) return 'GBC cable (or none attached)';
-  return `cable type ${cableType}`;
-}
-
 export function firmwareText(fw: { major: number; minor: number; patch: number } | null): string {
   return fw ? `v${fw.major}.${fw.minor}.${fw.patch}` : '—';
-}
-
-export function cableSelectionText(selection: CableSelection | undefined): string {
-  switch (selection) {
-    case 'gba':
-      return 'GBA cable (stored on the adapter)';
-    case 'gbc':
-      return 'GBC cable (stored on the adapter)';
-    case 'auto':
-      return 'Automatic';
-    default:
-      return 'Automatic (older firmware)';
-  }
 }

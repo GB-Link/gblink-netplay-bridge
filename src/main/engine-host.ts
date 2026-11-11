@@ -3,11 +3,8 @@ import { DeviceWatcher, Esp32Watcher, GBLinkEngine, type SessionPhase as EngineS
 import {
   FwStatus,
   GPSP_CORE_VERSION,
-  formatAwStats,
-  type CableSelection,
   type CloseReason,
   type Console,
-  type FirmwareVersion,
   type LinkGame,
   type NetplayPeer,
 } from '../engine/index';
@@ -33,7 +30,7 @@ const DEFAULT_RELAY_PORT = 55435;
 
 const FW_DEVICE_STATE: Partial<Record<FwStatus, DeviceStateName>> = {
   [FwStatus.DeviceReady]: 'device-ready',
-  [FwStatus.AwaitMode]: 'awaiting-gba',
+  [FwStatus.AwaitPlayerSettings]: 'awaiting-gba',
   [FwStatus.HandshakeReceived]: 'handshake-received',
   [FwStatus.LinkConnected]: 'link-connected',
   [FwStatus.LinkReconnecting]: 'reconnecting',
@@ -96,9 +93,6 @@ export class EngineHost {
         blocked: p.present ? p.detail !== undefined : false,
       });
       if (p.detail) this.log('warn', `adapter present but not openable: ${p.detail}`);
-    });
-    this.engine.on('cable-type', (cableType) => {
-      this.broadcast({ type: 'device', cableType });
     });
     this.espWatcher.on('log', (msg) => this.log('info', msg));
     this.espWatcher.on('presence', (p) => {
@@ -257,17 +251,6 @@ export class EngineHost {
     return { game, console, switchRoom, nationalBypass, espPort: this.espWatcher.presence.path };
   }
 
-  /** Persist the link-cable selection on the adapter; idle only. */
-  async setCableSelection(selection: CableSelection): Promise<FirmwareVersion> {
-    // The watcher's probe and the selection write cannot share the interface.
-    await this.watcher.suspend();
-    try {
-      return await this.engine.setCableSelection(selection);
-    } finally {
-      if (!this.engine.isRunning) this.watcher.resume();
-    }
-  }
-
   private wireEngine(): void {
     this.engine.on('device', (d) => {
       const state: DeviceStateName = d.state === 'error' ? 'access-denied' : d.state;
@@ -313,7 +296,6 @@ export class EngineHost {
       this.broadcast({ type: 'counters', ...c });
     });
     this.engine.on('warn', (msg) => this.log('warn', msg));
-    this.engine.on('aw-stats', (s) => this.log('debug', formatAwStats(s)));
     this.engine.on('host-ready', (info) => this.onHostReady(info));
     this.engine.on('log', (msg) => this.log('info', msg));
     this.engine.on('error', (e) => this.log('error', e.message));

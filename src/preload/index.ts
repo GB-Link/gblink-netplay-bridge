@@ -9,7 +9,6 @@ import {
   type JoinRelayRequest,
   type LobbyRoom,
 } from '../shared/ipc';
-import type { CableSelection, FirmwareVersion } from '../engine/types';
 
 const api: BridgeApi = {
   platform: process.platform,
@@ -26,8 +25,6 @@ const api: BridgeApi = {
   resetSettings: () => ipcRenderer.invoke(IPC.resetSettings) as Promise<AppSettings>,
   installUdevRule: () =>
     ipcRenderer.invoke(IPC.installUdevRule) as Promise<{ ok: boolean; detail?: string }>,
-  setCableSelection: (selection: CableSelection) =>
-    ipcRenderer.invoke(IPC.setCableSelection, selection) as Promise<FirmwareVersion>,
   openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,
   copyText: (text: string) => ipcRenderer.invoke(IPC.copyText, text) as Promise<void>,
   onEvent: (cb: (ev: BridgeEvent) => void) => {

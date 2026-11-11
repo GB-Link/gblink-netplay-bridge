@@ -1,6 +1,6 @@
 {
   "name": "gblink-netplay-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Bridge a real GBA (GB-Link USB) or a Switch (ESP32 bridge) into RetroArch netplay sessions with gpsp players: Pokemon Gen 3 by cable or Wireless Adapter, Advance Wars.",
@@ -10,22 +10,29 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "typecheck:main": "tsc -p tsconfig.main.json --noEmit",
+    "typecheck:android": "tsc -p tsconfig.android.json --noEmit",
     "build:main": "node scripts/build-main.mjs",
     "start": "npm run build:main && electron .",
     "dev": "npm run build:main && GBLINK_DEV=1 electron .",
     "cli": "tsx src/cli.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:android": "node scripts/build-android.mjs"
   },
   "dependencies": {
     "serialport": "^13.0.0",
     "usb": "^2.13.0"
   },
   "devDependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/cli": "8.5.2",
+    "@capacitor/core": "8.5.2",
     "@types/node": "^22.10.0",
+    "buffer": "6.0.3",
     "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.24.2",
+    "events": "3.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^3.2.7"

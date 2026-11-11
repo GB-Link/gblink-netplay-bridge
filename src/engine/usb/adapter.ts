@@ -1,29 +1,16 @@
 import { EventEmitter } from 'node:events';
-import { CABLE_SELECTION_VALUE, FwStatus, cableSelectionFromValue } from '../types';
-import type {
-  AdapterEvents,
-  AdapterRole,
-  AwStats,
-  AwTimingOverride,
-  CableSelection,
-  FirmwareVersion,
-  IGBLinkAdapter,
-  LinkGame,
-} from '../types';
-import { AW_MODE_VARIANT } from '../aw/maw1';
-import { CMD_GET_AW_STATS, decodeAwStats } from '../aw/awStats';
+import { FwStatus } from '../types';
+import type { AdapterEvents, FirmwareVersion, IGBLinkAdapter, LinkGame, PlayerSettings, Round } from '../types';
+import { AW_CHUNK_LEN, AW_MODE_VARIANT } from '../aw/maw1';
 import { UsbTransport } from './device';
 import type { ILinkTransport } from './device';
 
 const CMD_SET_MODE = 0x00;
 const CMD_CANCEL = 0x01;
 const CMD_GET_FIRMWARE_INFO = 0x0f;
-const CMD_SET_MODE_MASTER = 0x10;
-const CMD_SET_MODE_SLAVE = 0x11;
+const CMD_SET_PLAYER_SETTINGS = 0x10;
 const CMD_START_HANDSHAKE = 0x12;
 const CMD_CONNECT_LINK = 0x13;
-const CMD_GET_CABLE_TYPE = 0x4a;
-const CMD_SET_CABLE_SELECTION = 0x4b;
 
 const MODE_GBA_LINK = 0x01;
 const MODE_ADVANCE_WARS = 0x04;
@@ -31,6 +18,14 @@ const MODE_WIRELESS = 0x07;
 const CMD_GET_RFU_ISR_STATS = 0x4c;
 const RFU_STATS_REPLY_LEN = 21;
 const PROBE_TIMEOUT_MS = 400;
+
+const ROUND_WORDS = 8;
+/** A round on the data endpoints: the seat it comes from, then its 8 words (u16 LE). */
+const ROUND_PACKET_LEN = 1 + ROUND_WORDS * 2;
+const ROUNDS_PER_TRANSFER = 3;
+/** Data IN transfer of the cable modes: three rounds, or the adapter's seat and 50 bytes of MAW1 stream. */
+const LINK_TRANSFER_LEN = ROUNDS_PER_TRANSFER * ROUND_PACKET_LEN;
+const RFU_CHUNK_LEN = 64;
 
 const READY_TIMEOUT_MS = 2500;
 const REPLY_TIMEOUT_MS = 1500;
@@ -54,22 +49,16 @@ export class AdapterTimeoutError extends Error {
   }
 }
 
-/** SetMode payload for a game: [0x00, mode, variant, pxgUs u16 LE, syncUs u16 LE]. */
-export function setModeCommand(game: LinkGame, awTiming?: AwTimingOverride): number[] {
+/** SetMode payload for a game: [0x00, mode], and the variant for Advance Wars. */
+export function setModeCommand(game: LinkGame): number[] {
   if (game === 'gen3') return [CMD_SET_MODE, MODE_GBA_LINK];
   if (game === 'rfu') return [CMD_SET_MODE, MODE_WIRELESS];
-  const cmd = [CMD_SET_MODE, MODE_ADVANCE_WARS, AW_MODE_VARIANT[game]];
-  const pxg = awTiming?.pxgUs ?? 0;
-  const sync = awTiming?.syncUs ?? 0;
-  if (pxg !== 0 || sync !== 0) {
-    cmd.push(pxg & 0xff, (pxg >> 8) & 0xff, sync & 0xff, (sync >> 8) & 0xff);
-  }
-  return cmd;
+  return [CMD_SET_MODE, MODE_ADVANCE_WARS, AW_MODE_VARIANT[game]];
 }
 
 export class GBLinkAdapter extends EventEmitter<AdapterEvents> implements IGBLinkAdapter {
   private readonly transport: ILinkTransport;
-  /** How 64-byte data IN transfers are decoded for the current mode. */
+  /** How data IN transfers are decoded for the current mode. */
   private dataMode: 'rounds' | 'aw' | 'rfu' = 'rounds';
 
   constructor(transport?: ILinkTransport) {
@@ -98,23 +87,24 @@ export class GBLinkAdapter extends EventEmitter<AdapterEvents> implements IGBLin
     await this.transport.close();
   }
 
-  async initLinkMode(role: AdapterRole, game: LinkGame = 'gen3', awTiming?: AwTimingOverride): Promise<void> {
+  async initLinkMode(game: LinkGame, players?: PlayerSettings): Promise<void> {
+    // The wireless adapter is symmetric: the game decides who leads a room.
+    const settings = game === 'rfu' ? null : players;
+    if (settings === undefined) throw new Error(`the ${game} link mode needs player settings`);
     await this.cancel();
     await delay(CANCEL_SETTLE_MS);
     this.dataMode = game === 'gen3' ? 'rounds' : game === 'rfu' ? 'rfu' : 'aw';
-    // DeviceReady and AwaitMode can arrive back-to-back right after SetMode —
+    // DeviceReady and AwaitPlayerSettings can arrive back-to-back right after SetMode —
     // both waits must be armed before the command goes out.
     const ready = this.awaitStatus(FwStatus.DeviceReady, READY_TIMEOUT_MS);
-    const awaitMode = this.awaitStatus(FwStatus.AwaitMode, READY_TIMEOUT_MS);
+    const awaitSettings = this.awaitStatus(FwStatus.AwaitPlayerSettings, READY_TIMEOUT_MS);
     void ready.catch(() => undefined);
-    void awaitMode.catch(() => undefined);
-    await this.transport.sendCommand(setModeCommand(game, awTiming));
+    void awaitSettings.catch(() => undefined);
+    await this.transport.sendCommand(setModeCommand(game));
     await ready;
-    await awaitMode;
-    // The wireless adapter is symmetric: the game decides who leads a room,
-    // and the role commands only echo status words there.
-    if (game === 'rfu') return;
-    await this.transport.sendCommand([role === 'master' ? CMD_SET_MODE_MASTER : CMD_SET_MODE_SLAVE]);
+    await awaitSettings;
+    if (settings === null) return;
+    await this.transport.sendCommand([CMD_SET_PLAYER_SETTINGS, settings.playerCount, settings.seat]);
   }
 
   async startHandshake(): Promise<void> {
@@ -125,30 +115,32 @@ export class GBLinkAdapter extends EventEmitter<AdapterEvents> implements IGBLin
     await this.transport.sendCommand([CMD_CONNECT_LINK]);
   }
 
-  async setCableSelection(selection: CableSelection): Promise<void> {
-    await this.transport.sendCommand([CMD_SET_CABLE_SELECTION, CABLE_SELECTION_VALUE[selection]]);
-  }
-
   async cancel(): Promise<void> {
     await this.transport.sendCommand([CMD_CANCEL]);
   }
 
-  async writeRounds(buf: Buffer): Promise<void> {
-    if (buf.length !== 64) {
-      throw new Error(`writeRounds requires exactly 64 bytes (4 rounds x 8 u16 LE), got ${buf.length}`);
+  async writeRounds(seat: number, rounds: Round[]): Promise<void> {
+    if (rounds.length === 0 || rounds.length > ROUNDS_PER_TRANSFER) {
+      throw new Error(`writeRounds takes 1 to ${ROUNDS_PER_TRANSFER} rounds, got ${rounds.length}`);
     }
+    const buf = Buffer.alloc(rounds.length * ROUND_PACKET_LEN);
+    rounds.forEach((round, i) => {
+      const at = i * ROUND_PACKET_LEN;
+      buf.writeUInt8(seat, at);
+      for (let w = 0; w < ROUND_WORDS; w++) buf.writeUInt16LE(round[w] ?? 0, at + 1 + w * 2);
+    });
     await this.transport.sendData(buf);
   }
 
-  async writeAwChunk(buf: Buffer): Promise<void> {
-    if (buf.length !== 64) {
-      throw new Error(`writeAwChunk requires exactly 64 bytes of MAW1 stream, got ${buf.length}`);
+  async writeAwChunk(seat: number, stream: Buffer): Promise<void> {
+    if (stream.length !== AW_CHUNK_LEN) {
+      throw new Error(`writeAwChunk requires exactly ${AW_CHUNK_LEN} bytes of MAW1 stream, got ${stream.length}`);
     }
-    await this.transport.sendData(buf);
+    await this.transport.sendData(Buffer.concat([Buffer.from([seat]), stream]));
   }
 
   async writeRfuChunk(buf: Buffer): Promise<void> {
-    if (buf.length !== 64) {
+    if (buf.length !== RFU_CHUNK_LEN) {
       throw new Error(`writeRfuChunk requires exactly 64 bytes of RFU1 stream, got ${buf.length}`);
     }
     await this.transport.sendData(buf);
@@ -165,7 +157,7 @@ export class GBLinkAdapter extends EventEmitter<AdapterEvents> implements IGBLin
   }
 
   async getFirmwareInfo(): Promise<FirmwareVersion> {
-    // Reply: [0x0F, major, minor, patch, landingPage, cableSelection] on the data endpoint.
+    // Reply: [0x0F, major, minor, patch, landingPage] on the data endpoint.
     const reply = await this.commandReply([CMD_GET_FIRMWARE_INFO], CMD_GET_FIRMWARE_INFO);
     if (reply.length < 4) {
       throw new Error(`malformed GetFirmwareInfo reply (${reply.length} bytes)`);
@@ -176,24 +168,7 @@ export class GBLinkAdapter extends EventEmitter<AdapterEvents> implements IGBLin
       patch: reply.readUInt8(3),
     };
     if (reply.length >= 5) fw.landingPage = reply.readUInt8(4) !== 0;
-    if (reply.length >= 6) {
-      const sel = cableSelectionFromValue(reply.readUInt8(5));
-      if (sel !== undefined) fw.cableSelection = sel;
-    }
     return fw;
-  }
-
-  async getCableType(): Promise<number> {
-    // Reply: [0x4A, type] on the data endpoint.
-    const reply = await this.commandReply([CMD_GET_CABLE_TYPE], CMD_GET_CABLE_TYPE);
-    if (reply.length < 2) {
-      throw new Error(`malformed GetCableType reply (${reply.length} bytes)`);
-    }
-    return reply.readUInt8(1);
-  }
-
-  async getAwStats(): Promise<AwStats> {
-    return decodeAwStats(await this.commandReply([CMD_GET_AW_STATS], CMD_GET_AW_STATS, PROBE_TIMEOUT_MS));
   }
 
   private onStatusBytes(buf: Buffer): void {
@@ -203,22 +178,22 @@ export class GBLinkAdapter extends EventEmitter<AdapterEvents> implements IGBLin
   }
 
   private onDataBytes(buf: Buffer): void {
-    if (buf.length !== 64) {
+    if (this.dataMode === 'rfu') {
+      this.emit(buf.length === RFU_CHUNK_LEN ? 'rfu-chunk' : 'data-raw', buf);
+      return;
+    }
+    if (buf.length !== LINK_TRANSFER_LEN) {
       this.emit('data-raw', buf);
       return;
     }
     if (this.dataMode === 'aw') {
-      this.emit('aw-chunk', buf);
+      this.emit('aw-chunk', buf.subarray(1));
       return;
     }
-    if (this.dataMode === 'rfu') {
-      this.emit('rfu-chunk', buf);
-      return;
-    }
-    for (let r = 0; r < 4; r++) {
-      const round = new Uint16Array(8);
-      for (let w = 0; w < 8; w++) {
-        round[w] = buf.readUInt16LE(r * 16 + w * 2);
+    for (let at = 0; at < LINK_TRANSFER_LEN; at += ROUND_PACKET_LEN) {
+      const round = new Uint16Array(ROUND_WORDS);
+      for (let w = 0; w < ROUND_WORDS; w++) {
+        round[w] = buf.readUInt16LE(at + 1 + w * 2);
       }
       this.emit('round', round);
     }

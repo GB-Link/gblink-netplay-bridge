@@ -1,7 +1,7 @@
 import { Component, computed, inject, output } from '@angular/core';
 import { BridgeService } from '../services/bridge.service';
 import { StatusDot, type DotColor } from './status-dot';
-import { cableTypeText, firmwareText, linkPhaseText, sessionStatusText } from '../copy/state-copy';
+import { firmwareText, linkPhaseText, sessionStatusText } from '../copy/state-copy';
 
 @Component({
   selector: 'app-status-bar',
@@ -86,9 +86,7 @@ export class StatusBar {
     if (state === 'absent' || state === 'closed') return 'GB-Link not detected';
     if (state === 'access-denied') return 'GB-Link — USB access denied';
     const fw = this.bridge.firmware();
-    const name = fw ? `GB-Link ${firmwareText(fw)}` : 'GB-Link';
-    const cable = this.bridge.cableType();
-    return cable !== null ? `${name} · ${cableTypeText(cable)}` : name;
+    return fw ? `GB-Link ${firmwareText(fw)}` : 'GB-Link';
   });
 
   protected readonly espDot = computed<DotColor>(() => {

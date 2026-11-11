@@ -1,6 +1,5 @@
 import type {
   BridgeCounters,
-  CableSelection,
   CloseReason,
   Console,
   FirmwareVersion,
@@ -136,10 +135,8 @@ export interface Esp32State {
 export type BridgeEvent =
   | {
       type: 'device';
-      /** Absent on pure attribute updates (e.g. cable type mid-session). */
-      state?: DeviceStateName;
+      state: DeviceStateName;
       firmware?: FirmwareVersion;
-      cableType?: number;
       /** Watcher verdict: adapter present but not openable. */
       blocked?: boolean;
       raw?: number;
@@ -169,7 +166,7 @@ export type BridgeEvent =
   | { type: 'log'; level: 'info' | 'warn' | 'error' | 'debug'; msg: string; ts: number };
 
 export interface BridgeApi {
-  /** Host platform ('linux' | 'win32' | 'darwin'): drives troubleshooting copy. */
+  /** Host platform ('linux' | 'win32' | 'darwin' | 'android'): drives troubleshooting copy. */
   readonly platform: string;
   joinDirect(req: JoinDirectRequest): Promise<void>;
   joinRelay(req: JoinRelayRequest): Promise<void>;
@@ -182,8 +179,6 @@ export interface BridgeApi {
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   resetSettings(): Promise<AppSettings>;
   installUdevRule(): Promise<{ ok: boolean; detail?: string }>;
-  /** Persist the link-cable selection on the adapter (firmware 0x4b). */
-  setCableSelection(selection: CableSelection): Promise<FirmwareVersion>;
   openExternal(url: string): Promise<void>;
   copyText(text: string): Promise<void>;
   onEvent(cb: (ev: BridgeEvent) => void): () => void;
@@ -201,7 +196,6 @@ export const IPC = {
   setSettings: 'settings:set',
   resetSettings: 'settings:reset',
   installUdevRule: 'app:installUdevRule',
-  setCableSelection: 'device:setCableSelection',
   openExternal: 'app:openExternal',
   copyText: 'app:copyText',
   event: 'bridge:event',
